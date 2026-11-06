@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "BSD-2-Clause"
+repository = "https://codeberg.org/scottfk/openrc-rs"
+rust-version = "1.88"
+
+[workspace.dependencies]
+libc = "0.2"
+openrc-compat = { path = "crates/compat" }
+openrc-einfo = { path = "crates/einfo" }
+openrc-rc = { path = "crates/rc" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
