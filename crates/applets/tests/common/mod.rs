@@ -75,6 +75,10 @@ pub struct Case {
     pub setup: Option<fn(&Path)>,
     /// Explicit (C, Rust) programs instead of the applet's binaries.
     pub bins: Option<(PathBuf, PathBuf)>,
+    /// Run the *reference C program* both times: once on the C libraries,
+    /// once with LD_LIBRARY_PATH pointing at our librc.so.1/libeinfo.so.1
+    /// (the reference binaries use RUNPATH, which that overrides).
+    pub ourlibs: bool,
     /// Run in a private user + mount namespace (see [`Ns`]).
     pub ns: Option<Ns>,
     /// Run as PID 1 of a fresh user + PID namespace (with its own /proc),
@@ -93,6 +97,9 @@ pub struct Ns {
     /// tmpfs mounts to create, in order (`$ROOT` expanded); each mount
     /// point is created (mkdir) just before mounting.
     pub tmpfs: Vec<String>,
+    /// Bind mounts `(source, target)` (`$ROOT` expanded), after the tmpfs
+    /// mounts: e.g. fixture directories over /etc/init.d or /run/openrc.
+    pub binds: Vec<(String, String)>,
 }
 
 impl Case {
@@ -105,6 +112,7 @@ impl Case {
             syslog: false,
             setup: None,
             bins: None,
+            ourlibs: false,
             ns: None,
             pidns: None,
         }
@@ -119,6 +127,12 @@ impl Case {
     pub fn pidns(mut self, prelude: &'static str) -> Case {
         self.pidns = Some(prelude);
         self
+    }
+    /// A reference C program, compared on C vs our libraries.
+    pub fn on_our_libs(applet: &'static str, args: &[&str]) -> Case {
+        let mut c = Case::new(applet, args);
+        c.ourlibs = true;
+        c
     }
     pub fn ns(mut self, ns: Ns) -> Case {
         self.ns = Some(ns);
@@ -261,6 +275,13 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
         CString::new(f.display().to_string()).unwrap()
     });
     let tmpfs: Vec<CString> = ns.tmpfs.iter().map(|t| CString::new(t.replace("$ROOT", root_s)).unwrap()).collect();
+    let binds: Vec<(CString, CString)> = ns
+        .binds
+        .iter()
+        .map(|(a, b)| {
+            (CString::new(a.replace("$ROOT", root_s)).unwrap(), CString::new(b.replace("$ROOT", root_s)).unwrap())
+        })
+        .collect();
 
     fn write_file(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
         // SAFETY: valid C string and buffer.
@@ -306,6 +327,15 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
                 libc::mkdir(t.as_ptr(), 0o755);
                 check(libc::mount(c"tmpfs".as_ptr(), t.as_ptr(), c"tmpfs".as_ptr(), 0, c"size=1m".as_ptr().cast()))?;
             }
+            for (src, dst) in &binds {
+                check(libc::mount(
+                    src.as_ptr(),
+                    dst.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_REC,
+                    std::ptr::null(),
+                ))?;
+            }
             Ok(())
         });
     }
@@ -340,7 +370,7 @@ fn run_pty(mut cmd: Command) -> (Vec<u8>, std::process::ExitStatus) {
     (out, child.wait().unwrap())
 }
 
-fn run(bin: &Path, case: &Case, name: &str) -> Outcome {
+fn run(bin: &Path, case: &Case, name: &str, ourlibs: bool) -> Outcome {
     let root = case.setup.map(|setup| {
         let dir = sandbox_path(name);
         reset_sandbox(&dir);
@@ -348,7 +378,10 @@ fn run(bin: &Path, case: &Case, name: &str) -> Outcome {
         dir
     });
     let log = case.syslog.then(SyslogCapture::start);
-    let cmd = command(bin, case, root.as_deref());
+    let mut cmd = command(bin, case, root.as_deref());
+    if ourlibs {
+        cmd.env("LD_LIBRARY_PATH", our_libdir());
+    }
     let (stdout, stderr, status) = if case.pty {
         let (out, st) = run_pty(cmd);
         (out, Vec::new(), st)
@@ -360,6 +393,35 @@ fn run(bin: &Path, case: &Case, name: &str) -> Outcome {
     let tree = root.as_deref().map(snapshot).unwrap_or_default();
     let syslog = log.map(SyslogCapture::finish).unwrap_or_default();
     Outcome { stdout, stderr, status: status_string(status), tree, syslog }
+}
+
+/// As root (the VM), the names in `/`, to catch cases that write outside
+/// their sandbox; empty (unchecked) otherwise.
+fn root_entries() -> Vec<std::ffi::OsString> {
+    if !is_root() {
+        return Vec::new();
+    }
+    let mut v: Vec<_> = std::fs::read_dir("/").unwrap().flatten().map(|e| e.file_name()).collect();
+    v.sort();
+    v
+}
+
+/// Our C ABI libraries (`make capi`).
+pub fn our_libdir() -> PathBuf {
+    repo_root().join("target/capi")
+}
+
+/// Can C programs be run on our libraries (has `make capi` been run)?
+/// Panics instead of skipping if OPENRC_REF_REQUIRED is set.
+pub fn our_libs_built() -> bool {
+    let ok = our_libdir().join("librc.so.1").exists() && our_libdir().join("libeinfo.so.1").exists();
+    if !ok {
+        if std::env::var_os("OPENRC_REF_REQUIRED").is_some() {
+            panic!("target/capi libraries missing; run `make capi`");
+        }
+        eprintln!("SKIPPED: target/capi libraries missing; run `make capi`");
+    }
+    ok
 }
 
 /// Is this test process root?
@@ -430,10 +492,14 @@ pub fn check_all(group: &str, cases: &[Case]) {
         let name = format!("{group}-{i}");
         let (cbin, rbin) = match &case.bins {
             Some((c, r)) => (c.clone(), r.clone()),
+            None if case.ourlibs => (reference_bin(&refdir, case.applet), reference_bin(&refdir, case.applet)),
             None => (reference_bin(&refdir, case.applet), PathBuf::from(OURS)),
         };
-        let want = run(&cbin, case, &name);
-        let got = run(&rbin, case, &name);
+        let before = root_entries();
+        let want = run(&cbin, case, &name, false);
+        let got = run(&rbin, case, &name, case.ourlibs);
+        let after = root_entries();
+        assert_eq!(before, after, "{}: case changed / (tests must stay in their sandbox): {}", group, case.describe());
         if want != got {
             let _ = writeln!(failures, "\n=== {} ===", case.describe());
             if want.stdout != got.stdout {

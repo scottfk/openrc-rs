@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo"]
+members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo", "crates/capi-rc"]
 
 [workspace.package]
 version = "0.1.0"

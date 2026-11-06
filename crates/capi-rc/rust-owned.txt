@@ -1,0 +1,28 @@
+# Functions of librc.so.1 implemented in Rust (crates/capi-rc/src/lib.rs).
+# Their definitions in upstream/*.c are made weak at link time, so these
+# win, including for calls from the remaining C.  Move a function here
+# when its port lands; when upstream/ is empty, delete it.
+clear_dirfds
+config_list
+rc_conf_value
+rc_config_list
+rc_config_load
+rc_dirfd
+rc_getfile
+rc_is_user
+rc_newer_than
+rc_older_than
+rc_proc_getent
+rc_runleveldir
+rc_scriptdirfds
+rc_scriptdirs
+rc_service_getenv
+rc_service_setenv
+rc_service_value_get
+rc_service_value_set
+rc_set_user
+rc_svcdir
+rc_sys
+rc_sysconfdir
+rc_usrconfdir
+rc_yesno

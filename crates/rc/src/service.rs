@@ -25,11 +25,22 @@ fn write_at(dir: std::os::fd::BorrowedFd<'_>, path: &[u8], value: &[u8]) -> bool
     }
 }
 
-/// `rc_service_value_get()`: the contents of an option file, as a C
-/// string would see them (up to the first NUL).
+/// `rc_service_value_get()`: the whole contents of an option file (C
+/// callers then see it as a C string, up to the first NUL).
 pub fn rc_service_value_get(service: &[u8], option: &[u8]) -> Option<Vec<u8>> {
-    let file = svc_path("options", &bcat!(service, "/", option));
-    rc_getfile(&file).map(|b| openrc_compat::bytes::c_str_prefix(&b).to_vec())
+    rc_getfile(&svc_path("options", &bcat!(service, "/", option)))
+}
+
+/// `rc_service_getenv(service, name, &buf)`: the saved value's bytes.
+pub fn rc_service_getenv(service: &[u8], name: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let dfd = rc_dirfd(RcDir::Environ)?;
+    let path = bcat!(service, "/", name);
+    let size = sys::fstatat(Some(dfd), &path, 0).ok()?.size.max(0) as u64;
+    let fd = sys::openat(Some(dfd), &path, libc::O_RDONLY, 0o666).ok()?;
+    let mut buf = Vec::new();
+    std::fs::File::from(fd).take(size).read_to_end(&mut buf).ok()?;
+    Some(buf)
 }
 
 /// `rc_service_value_set()`: write an option; `None` removes it.
