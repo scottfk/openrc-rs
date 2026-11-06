@@ -56,6 +56,9 @@ pub struct Case {
     pub env: Vec<(String, Vec<u8>)>,
     /// Run with stdin/stdout/stderr on a pseudo-terminal (output merged).
     pub pty: bool,
+    /// Capture syslog messages on a private /dev/log (root only, and only
+    /// when no syslog daemon owns /dev/log).
+    pub syslog: bool,
     /// Create a sandbox directory, populated by this function; `$ROOT` in
     /// args is replaced by its path, and its final state is compared.
     pub setup: Option<fn(&Path)>,
@@ -70,6 +73,7 @@ impl Case {
             args: args.iter().map(|s| s.to_string()).collect(),
             env: Vec::new(),
             pty: false,
+            syslog: false,
             setup: None,
             bins: None,
         }
@@ -79,6 +83,10 @@ impl Case {
     }
     pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
         self.env.push((k.into(), v.to_vec()));
+        self
+    }
+    pub fn syslog(mut self) -> Case {
+        self.syslog = true;
         self
     }
     pub fn pty(mut self) -> Case {
@@ -113,6 +121,7 @@ struct Outcome {
     stderr: Vec<u8>,
     status: String,
     tree: Vec<String>,
+    syslog: Vec<String>,
 }
 
 fn status_string(s: std::process::ExitStatus) -> String {
@@ -216,6 +225,7 @@ fn run(bin: &Path, case: &Case, name: &str) -> Outcome {
         setup(&dir);
         dir
     });
+    let log = case.syslog.then(SyslogCapture::start);
     let cmd = command(bin, case, root.as_deref());
     let (stdout, stderr, status) = if case.pty {
         let (out, st) = run_pty(cmd);
@@ -226,7 +236,63 @@ fn run(bin: &Path, case: &Case, name: &str) -> Outcome {
         (o.stdout, o.stderr, o.status)
     };
     let tree = root.as_deref().map(snapshot).unwrap_or_default();
-    Outcome { stdout, stderr, status: status_string(status), tree }
+    let syslog = log.map(SyslogCapture::finish).unwrap_or_default();
+    Outcome { stdout, stderr, status: status_string(status), tree, syslog }
+}
+
+/// Is this test process root?
+pub fn is_root() -> bool {
+    // SAFETY: geteuid cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// A throwaway syslog: binds /dev/log for the duration of one run.
+struct SyslogCapture {
+    sock: std::os::unix::net::UnixDatagram,
+}
+
+const DEV_LOG: &str = "/dev/log";
+
+impl SyslogCapture {
+    fn start() -> SyslogCapture {
+        assert!(is_root(), "syslog capture needs root");
+        let _ = std::fs::remove_file(DEV_LOG);
+        let sock = std::os::unix::net::UnixDatagram::bind(DEV_LOG).expect("bind /dev/log");
+        sock.set_nonblocking(true).unwrap();
+        SyslogCapture { sock }
+    }
+
+    /// Collect what arrived, normalised: glibc sends
+    /// `<PRI>Mmm dd hh:mm:ss ident[pid]: msg`; drop the time and pid.
+    fn finish(self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        while let Ok(n) = self.sock.recv(&mut buf) {
+            let m = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let norm = match (m.find('>'), m.find("]: "), m.find('[')) {
+                (Some(gt), Some(end), Some(lb)) if gt + 16 <= lb => {
+                    format!("{} {}[PID]{}", &m[..=gt], &m[gt + 16..lb], &m[end + 1..])
+                }
+                _ => m,
+            };
+            out.push(norm);
+        }
+        drop(self.sock);
+        let _ = std::fs::remove_file(DEV_LOG);
+        out
+    }
+}
+
+/// Can syslog be captured here (root, and no daemon owns /dev/log)?
+pub fn syslog_capturable() -> bool {
+    if !is_root() {
+        return false;
+    }
+    match std::fs::symlink_metadata(DEV_LOG) {
+        Err(_) => true,
+        // A stale socket is fine; a live daemon's is not.
+        Ok(_) => std::os::unix::net::UnixDatagram::unbound().unwrap().connect(DEV_LOG).is_err(),
+    }
 }
 
 fn show(b: &[u8]) -> String {
@@ -256,6 +322,9 @@ pub fn check_all(group: &str, cases: &[Case]) {
             }
             if want.status != got.status {
                 let _ = writeln!(failures, "status: C {} / Rust {}", want.status, got.status);
+            }
+            if want.syslog != got.syslog {
+                let _ = writeln!(failures, "syslog:\n  C:    {:?}\n  Rust: {:?}", want.syslog, got.syslog);
             }
             if want.tree != got.tree {
                 let _ = writeln!(failures, "tree:\n  C:    {:?}\n  Rust: {:?}", want.tree, got.tree);

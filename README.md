@@ -47,8 +47,28 @@ linking one C program against each `libeinfo.so.1`.
 Plain `cargo test` works too. It skips the differential tests if the
 reference hasn't been built.
 
-Not tested on purpose: anything that writes to syslog (see QUIRKS.md: `esyslog`
-logs at LOG_EMERG), and root-only paths. Those belong on a VM test bed.
+The host runs unprivileged and never touches syslog (see QUIRKS.md: `esyslog`
+logs at LOG_EMERG). [crates/applets/tests/diff_root.rs](crates/applets/tests/diff_root.rs)
+covers both, and runs only as root: `checkpath` chown and symlink-ownership
+rules, and syslog output captured on a private `/dev/log`. Run it on a test
+VM with no syslog daemon.
+
+### Testing on a VM
+
+On a disposable Gentoo VM with stock OpenRC at the reference tag:
+
+```sh
+make check                                   # as root: includes diff_root.rs
+make install DESTDIR=/root/stage OPENRC_BRANDING="Gentoo Linux"
+tools/exercise-openrc.sh > c.txt             # baseline with C OpenRC
+tools/swap-install.sh install /root/stage    # swap in openrc-rs (backs up originals)
+tools/exercise-openrc.sh > rs.txt; diff c.txt rs.txt
+reboot                                       # then diff the serial-console boot logs
+tools/swap-install.sh restore
+```
+
+Once swapped in, C OpenRC's own `openrc`, `openrc-run`, `rc-status` and so on
+load our `libeinfo.so.1`, so the whole boot exercises it.
 
 ## Roadmap
 

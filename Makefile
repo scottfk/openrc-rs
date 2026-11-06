@@ -1,6 +1,7 @@
 # Makefile - front door for building, testing and installing openrc-rs
 #
 # 20261106 - Created by Claude (claude.ai, Anthropic) - scottfk
+# 20261106 - Document OPENRC_BRANDING (distro name in --version) - Claude - scottfk
 #
 # Cargo builds everything except the final link of the C ABI libraries
 # (the variadic printf-style functions are C, see crates/capi-einfo/), so
@@ -11,7 +12,9 @@
 #                     (unit + differential), failing if the reference is missing
 #   make install DESTDIR=/some/stage   install with applet symlinks
 #
-# Install layout variables match upstream's meson defaults.
+# Install layout variables match upstream's meson defaults.  Set
+# OPENRC_BRANDING="Gentoo Linux" (upstream's -Dbranding) to match a distro
+# build's --version output; cargo rebuilds when it changes.
 
 CARGO   ?= cargo
 CC      ?= cc
