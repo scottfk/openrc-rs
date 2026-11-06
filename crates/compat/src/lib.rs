@@ -10,6 +10,7 @@
 
 pub mod bytes;
 pub mod env;
+pub mod exec;
 pub mod getopt;
 pub mod num;
 pub mod stdio;

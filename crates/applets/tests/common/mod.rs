@@ -71,6 +71,20 @@ pub struct Case {
     pub setup: Option<fn(&Path)>,
     /// Explicit (C, Rust) programs instead of the applet's binaries.
     pub bins: Option<(PathBuf, PathBuf)>,
+    /// Run in a private user + mount namespace (see [`Ns`]).
+    pub ns: Option<Ns>,
+}
+
+/// Namespace setup for a case.  The child becomes root of a new user
+/// namespace with its own mount namespace, so fixtures can be mounted
+/// without privileges and without affecting the host.
+#[derive(Clone, Debug, Default)]
+pub struct Ns {
+    /// Contents for a fixture bind-mounted over /etc/fstab (`$ROOT` expanded).
+    pub fstab: Option<String>,
+    /// tmpfs mounts to create, in order (`$ROOT` expanded); each mount
+    /// point is created (mkdir) just before mounting.
+    pub tmpfs: Vec<String>,
 }
 
 impl Case {
@@ -83,6 +97,7 @@ impl Case {
             syslog: false,
             setup: None,
             bins: None,
+            ns: None,
         }
     }
     pub fn env(self, k: &str, v: &str) -> Case {
@@ -90,6 +105,10 @@ impl Case {
     }
     pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
         self.env.push((k.into(), v.to_vec()));
+        self
+    }
+    pub fn ns(mut self, ns: Ns) -> Case {
+        self.ns = Some(ns);
         self
     }
     pub fn syslog(mut self) -> Case {
@@ -193,7 +212,76 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
         cmd.env(k, osstr_bytes(&replace_bytes(v, b"$ROOT", root_s.as_bytes())));
     }
     cmd.current_dir(root.unwrap_or(Path::new("/")));
+    if let Some(ns) = &case.ns {
+        enter_ns_before_exec(&mut cmd, ns, &root_s, root);
+    }
     cmd
+}
+
+/// Arrange for the child to enter a fresh user+mount namespace and set up
+/// `ns` before exec.  Everything the child needs is allocated here: after
+/// fork (in a multi-threaded test process) it may only make raw syscalls.
+fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&Path>) {
+    use std::ffi::CString;
+    // SAFETY: getuid/getgid cannot fail.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let uid_map = format!("0 {uid} 1");
+    let gid_map = format!("0 {gid} 1");
+    let fstab_src = ns.fstab.as_ref().map(|contents| {
+        let dir = root.expect("fstab fixture needs a sandbox");
+        let f = dir.with_extension("fstab");
+        std::fs::write(&f, contents.replace("$ROOT", root_s)).unwrap();
+        CString::new(f.display().to_string()).unwrap()
+    });
+    let tmpfs: Vec<CString> = ns.tmpfs.iter().map(|t| CString::new(t.replace("$ROOT", root_s)).unwrap()).collect();
+
+    fn write_file(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
+        // SAFETY: valid C string and buffer.
+        unsafe {
+            let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let n = libc::write(fd, data.as_ptr().cast(), data.len());
+            libc::close(fd);
+            if n < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+        }
+    }
+    fn check(r: libc::c_int) -> std::io::Result<()> {
+        if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+    }
+
+    // SAFETY: the closure only makes async-signal-safe syscalls on data
+    // prepared above.
+    unsafe {
+        cmd.pre_exec(move || {
+            check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
+            write_file(c"/proc/self/setgroups", b"deny")?;
+            write_file(c"/proc/self/uid_map", uid_map.as_bytes())?;
+            write_file(c"/proc/self/gid_map", gid_map.as_bytes())?;
+            check(libc::mount(
+                std::ptr::null(),
+                c"/".as_ptr(),
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ))?;
+            if let Some(src) = &fstab_src {
+                check(libc::mount(
+                    src.as_ptr(),
+                    c"/etc/fstab".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND,
+                    std::ptr::null(),
+                ))?;
+            }
+            for t in &tmpfs {
+                libc::mkdir(t.as_ptr(), 0o755);
+                check(libc::mount(c"tmpfs".as_ptr(), t.as_ptr(), c"tmpfs".as_ptr(), 0, c"size=1m".as_ptr().cast()))?;
+            }
+            Ok(())
+        });
+    }
 }
 
 /// Run on a pty: returns (merged output, status).

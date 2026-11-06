@@ -156,6 +156,32 @@ pub fn parse_mode(text: &[u8]) -> Option<u32> {
     None
 }
 
+/// `parse_duration()` (`shared/timeutils.c`): "20", "500ms", "2min", ...
+/// in milliseconds; `None` if invalid.  (Upstream spells "miliseconds".)
+pub fn parse_duration(duration: &[u8]) -> Option<i64> {
+    const EXTS: &[(&str, i64)] = &[
+        ("ms", 1),
+        ("miliseconds", 1),
+        ("s", 1000),
+        ("sec", 1000),
+        ("seconds", 1000),
+        ("", 1000),
+        ("m", 60_000),
+        ("min", 60_000),
+        ("minutes", 60_000),
+        ("h", 3_600_000),
+        ("hour", 3_600_000),
+    ];
+    let p = openrc_compat::num::strtoimax(duration, 10);
+    if p.erange || duration.is_empty() || p.value < 0 {
+        return None;
+    }
+    // strtol leaves endptr at the start when nothing was converted.
+    let rest = &duration[p.end..];
+    let unit = EXTS.iter().find(|(e, _)| e.as_bytes() == rest)?.1;
+    p.value.checked_mul(unit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +196,17 @@ mod tests {
         assert_eq!(parse_mode(b"8"), None);
         assert_eq!(parse_mode(b"u+x"), None);
         assert_eq!(parse_mode(b"17777"), None);
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(parse_duration(b"20"), Some(20_000));
+        assert_eq!(parse_duration(b"500ms"), Some(500));
+        assert_eq!(parse_duration(b"2min"), Some(120_000));
+        assert_eq!(parse_duration(b"1h"), Some(3_600_000));
+        assert_eq!(parse_duration(b""), None);
+        assert_eq!(parse_duration(b"-1"), None);
+        assert_eq!(parse_duration(b"5 s"), None);
+        assert_eq!(parse_duration(b"abc"), None);
     }
 }

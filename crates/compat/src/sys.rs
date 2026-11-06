@@ -391,3 +391,165 @@ pub fn syslog_once(ident: &[u8], option: i32, facility: i32, priority: i32, msg:
         libc::closelog();
     }
 }
+
+/// A `struct mntent` (fields already decoded by libc).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MntEnt {
+    pub fsname: Vec<u8>,
+    pub dir: Vec<u8>,
+    pub fstype: Vec<u8>,
+    pub opts: Vec<u8>,
+    pub freq: i32,
+    pub passno: i32,
+}
+
+/// All entries of an fstab-format file, via libc's
+/// `setmntent`/`getmntent`/`endmntent` (so parsing matches C exactly).
+/// `None` if the file cannot be opened.
+pub fn read_mntent(path: &str) -> Option<Vec<MntEnt>> {
+    let path = to_cstring(path.as_bytes());
+    // SAFETY: valid C strings; getmntent's result is copied before the next
+    // call, and the FILE is closed exactly once.
+    unsafe {
+        let fp = libc::setmntent(path.as_ptr(), c"r".as_ptr());
+        if fp.is_null() {
+            return None;
+        }
+        let mut out = Vec::new();
+        loop {
+            let ent = libc::getmntent(fp);
+            let Some(e) = ent.as_ref() else { break };
+            let s = |p: *const libc::c_char| CStr::from_ptr(p).to_bytes().to_vec();
+            out.push(MntEnt {
+                fsname: s(e.mnt_fsname),
+                dir: s(e.mnt_dir),
+                fstype: s(e.mnt_type),
+                opts: s(e.mnt_opts),
+                freq: e.mnt_freq,
+                passno: e.mnt_passno,
+            });
+        }
+        libc::endmntent(fp);
+        Some(out)
+    }
+}
+
+/// A compiled POSIX regex (`regcomp`/`regexec`/`regfree`).
+pub struct Regex {
+    re: Box<libc::regex_t>,
+}
+
+impl std::fmt::Debug for Regex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Regex")
+    }
+}
+
+impl Regex {
+    /// `regcomp(pattern, cflags)`; on failure the `regerror` text (as
+    /// produced into a 256-byte buffer, like OpenRC's callers).
+    pub fn new(pattern: &[u8], cflags: i32) -> Result<Regex, Vec<u8>> {
+        let pat = to_cstring(pattern);
+        // SAFETY: regex_t is plain data; regcomp initialises it.
+        let mut re: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
+        // SAFETY: valid pattern string and regex_t storage.
+        let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), cflags) };
+        if rc != 0 {
+            let mut buf = [0 as libc::c_char; 256];
+            // SAFETY: buffer valid for its length; regerror NUL-terminates.
+            unsafe {
+                libc::regerror(rc, &*re, buf.as_mut_ptr(), buf.len());
+                return Err(CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec());
+            }
+        }
+        Ok(Regex { re })
+    }
+
+    /// `regexec(re, s, 0, NULL, 0) == 0` (s as a C string).
+    pub fn is_match(&self, s: &[u8]) -> bool {
+        let s = to_cstring(s);
+        // SAFETY: compiled regex and valid C string; no match array.
+        unsafe { libc::regexec(&*self.re, s.as_ptr(), 0, std::ptr::null_mut(), 0) == 0 }
+    }
+}
+
+impl Drop for Regex {
+    fn drop(&mut self) {
+        // SAFETY: re was successfully compiled and is freed once.
+        unsafe { libc::regfree(&mut *self.re) }
+    }
+}
+
+/// `waitpid(pid, &status, flags)`: `(pid, status)`.
+pub fn waitpid(pid: i32, flags: i32) -> Result<(i32, i32), Errno> {
+    let mut status = 0;
+    // SAFETY: status is a valid int.
+    let r = unsafe { libc::waitpid(pid, &mut status, flags) };
+    if r < 0 { Err(Errno::last()) } else { Ok((r, status)) }
+}
+
+/// `WIFEXITED(status) ? Some(WEXITSTATUS(status)) : None`.
+pub fn exit_status(status: i32) -> Option<i32> {
+    libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status))
+}
+
+/// `kill(pid, sig)`.
+pub fn kill(pid: i32, sig: i32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::kill(pid, sig) }).map(drop)
+}
+
+/// `getpid()`.
+pub fn getpid() -> i32 {
+    // SAFETY: cannot fail.
+    unsafe { libc::getpid() }
+}
+
+/// `getsid(pid)`.
+pub fn getsid(pid: i32) -> Result<i32, Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::getsid(pid) })
+}
+
+/// One `read(2)`, retried on nothing (like the C callers).
+pub fn read_once(fd: BorrowedFd<'_>, buf: &mut [u8]) -> Result<usize, Errno> {
+    // SAFETY: buf is valid for its length.
+    let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+    if n < 0 { Err(Errno::last()) } else { Ok(n as usize) }
+}
+
+fn clock_ms(clock: libc::clockid_t) -> i64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: ts is valid.
+    unsafe { libc::clock_gettime(clock, &mut ts) };
+    // timeutils.c ts_to_ms(): rounds to the nearest millisecond.
+    ts.tv_sec * 1000 + (ts.tv_nsec + 500_000) / 1_000_000
+}
+
+/// `tm_now()` (`shared/timeutils.c`): CLOCK_BOOTTIME in ms (Linux's
+/// CLOCK_MONOTONIC that keeps counting during suspend).
+pub fn tm_now() -> i64 {
+    clock_ms(libc::CLOCK_BOOTTIME)
+}
+
+/// `tm_sleep(ms, 0)`.  QUIRK (upstream): clock_nanosleep returns its
+/// error rather than -1, so an EINTR is never reported and the sleep is
+/// always resumed until complete.
+pub fn tm_sleep(ms: i64) {
+    let mut tv = libc::timespec { tv_sec: ms / 1000, tv_nsec: (ms % 1000) * 1_000_000 };
+    loop {
+        let mut rem = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: valid timespecs.
+        let ret = unsafe { libc::clock_nanosleep(libc::CLOCK_BOOTTIME, 0, &tv, &mut rem) };
+        if ret == 0 {
+            break;
+        }
+        tv = rem;
+    }
+}
+
+/// `realpath(path, NULL)`.
+pub fn realpath(path: &[u8]) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+    std::fs::canonicalize(crate::bytes::as_path(path)).ok().map(|p| p.as_os_str().as_bytes().to_vec())
+}

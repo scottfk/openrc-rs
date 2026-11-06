@@ -2,6 +2,8 @@
 
 pub mod checkpath;
 pub mod einfo;
+pub mod fstabinfo;
+pub mod mountinfo;
 pub mod newer;
 pub mod shell_var;
 pub mod swclock;
@@ -76,6 +78,9 @@ pub const APPLETS: &[Applet] = &[
     rc_bin("vewend", einfo::main),
     rc_bin("veindent", einfo::main),
     rc_bin("veoutdent", einfo::main),
+    rc_bin("fstabinfo", fstabinfo::main),
+    rc_bin("mountinfo", mountinfo::main),
+    rc_bin("do_unmount", mountinfo::main),
     rc_bin("is_newer_than", newer::is_newer_than),
     rc_bin("is_older_than", newer::is_older_than),
     rc_bin("shell_var", shell_var::main),

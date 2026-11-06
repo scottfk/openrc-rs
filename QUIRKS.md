@@ -38,6 +38,16 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | medium | `is_older_than SRC TGT...` never checks "older": like `is_newer_than` it calls `rc_newer_than`, and succeeds as soon as any TGT contains something newer than SRC. Upstream's comment calls it "perverted", for compatibility with baselayout. | `applets/newer.rs` |
 | low | `is_newer_than` passes on equal mtimes, so a file is "newer than" itself. Only whole seconds are compared. | `rc/mtime.rs` |
 
+## mountinfo / do_unmount / fstabinfo
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `do_unmount` without a `--` treats *every* argument as an umount option, so mountinfo gets no filters and it tries to unmount everything mounted. | `applets/mountinfo.rs` |
+| medium | `mountinfo -e`/`-E` (netdev filters) only judge a mount with no fstab entry by netdev if mount points were given. Otherwise the regex filters are applied instead, so non-fstab mounts are listed. | `applets/mountinfo.rs` |
+| low | `-p`/`-P` (point regex) match whatever field is being printed: with `-t`, `-i` or `-s` that's the node, options or fstype, not the mount point. | `applets/mountinfo.rs` |
+| low | The fstab lookup compares /proc/mounts' still-escaped mount point (`\040`) with fstab's decoded one, so mount points containing spaces never match fstab. | `applets/mountinfo.rs` |
+| low | `do_unmount`'s retry sleep can't be cut short by a child exiting. `tm_sleep` checks `clock_nanosleep` for -1, but it returns the error number, so EINTR always resumes the sleep. The sleep is capped at 500ms. | `compat/sys.rs` (`tm_sleep`) |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |
@@ -60,6 +70,10 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   is shorter than `st_size` when read, C loops forever; we return what was
   read. If reading fails (e.g. the option is a directory), C hands back a
   freed buffer (undefined behaviour); we report failure.
+- **Impossible inputs** where C crashes or reads uninitialised memory: a
+  /proc/mounts line with fewer than four fields (C dereferences NULL; we
+  use empty fields), and `waitpid` failing in fstabinfo (C reads an
+  uninitialised status; we report -1).
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with
