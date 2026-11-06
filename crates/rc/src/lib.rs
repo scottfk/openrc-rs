@@ -13,6 +13,7 @@ pub mod misc;
 pub mod mtime;
 pub mod paths;
 pub mod service;
+pub mod state;
 pub mod svcdir;
 pub mod sys;
 

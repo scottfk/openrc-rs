@@ -14,6 +14,8 @@
 
 #![allow(dead_code)]
 
+pub mod system;
+
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::os::unix::ffi::OsStringExt;
@@ -47,6 +49,20 @@ pub fn reference_dir() -> Option<PathBuf> {
 /// multi-name programs share their source directory's name.
 fn reference_bin(refdir: &Path, applet: &str) -> PathBuf {
     const SHARED: &[(&str, &[&str])] = &[
+        (
+            "mark_service",
+            &[
+                "mark_service_crashed",
+                "mark_service_failed",
+                "mark_service_hotplugged",
+                "mark_service_inactive",
+                "mark_service_started",
+                "mark_service_starting",
+                "mark_service_stopped",
+                "mark_service_stopping",
+                "mark_service_wasinactive",
+            ],
+        ),
         ("value", &["service_get_value", "service_set_value", "service_export", "get_options", "save_options"]),
         ("mountinfo", &["do_unmount"]),
     ];
@@ -496,8 +512,12 @@ pub fn check_all(group: &str, cases: &[Case]) {
             None => (reference_bin(&refdir, case.applet), PathBuf::from(OURS)),
         };
         let before = root_entries();
+        let t0 = std::time::Instant::now();
         let want = run(&cbin, case, &name, false);
         let got = run(&rbin, case, &name, case.ourlibs);
+        if t0.elapsed() > std::time::Duration::from_secs(2) {
+            eprintln!("{group}: slow case ({:.1}s for both runs): {}", t0.elapsed().as_secs_f64(), case.describe());
+        }
         let after = root_entries();
         assert_eq!(before, after, "{}: case changed / (tests must stay in their sandbox): {}", group, case.describe());
         if want != got {
