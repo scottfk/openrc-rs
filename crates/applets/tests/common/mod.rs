@@ -440,6 +440,31 @@ pub fn our_libs_built() -> bool {
     ok
 }
 
+/// tests/capi/rc-probe.c compiled against the reference librc (RUNPATH);
+/// run it with `ourlibs` to compare libraries.  None (skip) if the
+/// reference or our libraries are missing.
+pub fn rc_probe() -> Option<PathBuf> {
+    let refdir = reference_dir()?;
+    if !our_libs_built() {
+        return None;
+    }
+    let root = repo_root();
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rc-probe");
+    let libdir = refdir.join("librc");
+    let st = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
+        .arg("-o")
+        .arg(&out)
+        .arg(root.join("tests/capi/rc-probe.c"))
+        .arg(format!("-I{}", root.join("crates/capi-rc/upstream").display()))
+        .arg(format!("-L{}", libdir.display()))
+        .arg(format!("-Wl,-rpath,{}", libdir.display()))
+        .arg("-lrc")
+        .status()
+        .unwrap();
+    assert!(st.success(), "compiling rc-probe");
+    Some(out)
+}
+
 /// Is this test process root?
 pub fn is_root() -> bool {
     // SAFETY: geteuid cannot fail.

@@ -388,21 +388,6 @@ pub unsafe extern "C" fn rc_service_getenv(
 
 use rc::state;
 
-unsafe extern "C" {
-    /// Still C (librc-daemon.c) until Phase 2 step 3.
-    #[link_name = "rc_service_daemons_crashed"]
-    fn c_rc_service_daemons_crashed(service: *const c_char) -> bool;
-}
-
-fn daemons_crashed_via_c(service: &[u8]) -> (bool, i32) {
-    let s = to_cstring(service);
-    set_errno(0);
-    // SAFETY: valid C string; the C function only reads it.
-    let crashed = unsafe { c_rc_service_daemons_crashed(s.as_ptr()) };
-    // SAFETY: errno is thread-local.
-    (crashed, unsafe { *libc::__errno_location() })
-}
-
 /// Map an `Err(errno)` result to C's `false` + errno.
 fn errno_bool(r: Result<(), i32>) -> bool {
     match r {
@@ -513,14 +498,12 @@ pub unsafe extern "C" fn rc_service_in_runlevel(service: *const c_char, runlevel
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rc_service_mark(service: *const c_char, st: c_int) -> bool {
-    state::set_daemons_crashed_hook(daemons_crashed_via_c);
     // SAFETY: C string from the caller.
     unsafe { arg(service) }.is_some_and(|s| state::rc_service_mark(s, st))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rc_service_state(service: *const c_char) -> c_int {
-    state::set_daemons_crashed_hook(daemons_crashed_via_c);
     // SAFETY: C string from the caller.
     unsafe { arg(service) }.map_or(state::flags::STOPPED, state::rc_service_state)
 }
@@ -594,4 +577,121 @@ pub unsafe extern "C" fn rc_service_putenv(service: *const c_char, env: *const c
         (Some(s), Some(e)) => errno_bool(state::rc_service_putenv(s, e)),
         _ => false,
     }
+}
+
+// --- librc-daemon.c ---------------------------------------------------------
+
+/// `const char *const *argv` (NULL-terminated, or NULL) as owned bytes.
+///
+/// # Safety
+/// `argv` must be NULL or a NULL-terminated array of C strings.
+unsafe fn argv_arg(argv: *const *const c_char) -> Option<Vec<Vec<u8>>> {
+    if argv.is_null() {
+        return None;
+    }
+    let mut v = Vec::new();
+    // SAFETY: guaranteed by the caller.
+    unsafe {
+        let mut p = argv;
+        while !(*p).is_null() {
+            v.push(CStr::from_ptr(*p).to_bytes().to_vec());
+            p = p.add(1);
+        }
+    }
+    Some(v)
+}
+
+/// `RC_PID` / `RC_PIDLIST`: a `<sys/queue.h>` LIST, freed by callers.
+#[repr(C)]
+struct RcPid {
+    pid: libc::pid_t,
+    le_next: *mut RcPid,
+    le_prev: *mut *mut RcPid,
+}
+
+#[repr(C)]
+struct RcPidList {
+    lh_first: *mut RcPid,
+}
+
+/// `RC_PIDLIST *rc_find_pids(const char *exec, const char *const *argv, uid_t uid, pid_t pid)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_find_pids(
+    exec: *const c_char,
+    argv: *const *const c_char,
+    uid: libc::uid_t,
+    pid: libc::pid_t,
+) -> *mut c_void {
+    // SAFETY: C string and argv array from the caller.
+    let (exec, argv) = unsafe { (arg(exec), argv_arg(argv)) };
+    let Some(pids) = rc::daemon::rc_find_pids(exec, argv.as_deref(), uid, pid) else { return std::ptr::null_mut() };
+    // SAFETY: nodes are malloc'd and linked exactly as LIST_INSERT_HEAD
+    // does, so callers can walk and free() them.
+    unsafe {
+        let head = libc::malloc(std::mem::size_of::<RcPidList>()).cast::<RcPidList>();
+        if head.is_null() {
+            libc::abort();
+        }
+        (*head).lh_first = std::ptr::null_mut();
+        for p in pids {
+            let node = libc::malloc(std::mem::size_of::<RcPid>()).cast::<RcPid>();
+            if node.is_null() {
+                libc::abort();
+            }
+            (*node).pid = p;
+            (*node).le_next = (*head).lh_first;
+            if !(*head).lh_first.is_null() {
+                (*(*head).lh_first).le_prev = &mut (*node).le_next;
+            }
+            (*head).lh_first = node;
+            (*node).le_prev = &mut (*head).lh_first;
+        }
+        head.cast()
+    }
+}
+
+/// `bool rc_service_daemon_set(const char *service, const char *exec,
+///  const char *const *argv, const char *pidfile, bool started)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_daemon_set(
+    service: *const c_char,
+    exec: *const c_char,
+    argv: *const *const c_char,
+    pidfile: *const c_char,
+    started: bool,
+) -> bool {
+    // SAFETY: C strings and argv array from the caller.
+    let (s, e, a, p) = unsafe { (arg(service), arg(exec), argv_arg(argv), arg(pidfile)) };
+    let Some(s) = s else { return false };
+    match rc::daemon::rc_service_daemon_set(s, e, a.as_deref(), p, started) {
+        Ok(b) => b,
+        Err(err) => {
+            set_errno(err);
+            false
+        }
+    }
+}
+
+/// `bool rc_service_started_daemon(const char *service, const char *exec,
+///  const char *const *argv, int indx)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_started_daemon(
+    service: *const c_char,
+    exec: *const c_char,
+    argv: *const *const c_char,
+    indx: c_int,
+) -> bool {
+    // SAFETY: C strings and argv array from the caller.
+    let (s, e, a) = unsafe { (arg(service), arg(exec), argv_arg(argv)) };
+    match (s, e) {
+        (Some(s), Some(e)) => rc::daemon::rc_service_started_daemon(s, e, a.as_deref(), indx),
+        _ => false,
+    }
+}
+
+/// `bool rc_service_daemons_crashed(const char *service)`; errno as C leaves it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_daemons_crashed(service: *const c_char) -> bool {
+    // SAFETY: C string from the caller.
+    unsafe { arg(service) }.is_some_and(rc::daemon::rc_service_daemons_crashed)
 }

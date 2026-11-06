@@ -53,3 +53,8 @@ rc_service_delete
 rc_services_scheduled_by
 rc_services_scheduled
 rc_service_putenv
+# Phase 2 step 3: daemons
+rc_find_pids
+rc_service_daemon_set
+rc_service_started_daemon
+rc_service_daemons_crashed

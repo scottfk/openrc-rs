@@ -68,6 +68,16 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `rc_services_in_runlevel_stacked()` lists the runlevel's own services twice, because `rc_runlevel_stacks()` includes the runlevel itself. | `rc/state.rs` |
 | low | `rc_service_mark()` to STARTED or STOPPED also unlinks `scheduled/../<svc>`, i.e. `$svcdir/<svc>`, because it walks `..` too. | `rc/state.rs` |
 
+## librc: daemons (`librc-daemon.c`)
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `rc_service_started_daemon()` and the record matching label every argument `argv_0=`, while records number them `argv_0`, `argv_1`, .... A daemon matched with two or more arguments never matches. | `rc/daemon.rs` (`match_list`) |
+| medium | Matching consumes its list of wanted lines, and the callers reuse that list across a service's records. A record that partly matched makes a later record count as a match with only the remaining lines. | `rc/daemon.rs` (`match_daemon`) |
+| low | `rc_find_pids(exec)` compares against /proc's `comm`, which the kernel truncates to 15 bytes, so daemons with longer names are never found by exec. | `rc/daemon.rs` |
+| low | On an OpenVZ host, once one container process is seen, `rc_find_pids()` skips every later process too (its flag is never reset). | `rc/daemon.rs` |
+| low | `rc_service_daemons_crashed()` gives up on the rest of the service's records if one can't be opened. Whether a crash then counts depends on errno being EACCES afterwards, which can be left over from any failed call, such as another user's /proc entry. | `rc/daemon.rs` |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |

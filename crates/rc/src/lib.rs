@@ -8,6 +8,7 @@
 //! tree come next.
 
 pub mod conf;
+pub mod daemon;
 pub mod dirs;
 pub mod misc;
 pub mod mtime;
