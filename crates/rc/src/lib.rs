@@ -4,11 +4,13 @@
 //! ([`conf`]), user mode and the script search path ([`dirs`]),
 //! container/VM detection ([`sys`]), the service state directory
 //! ([`svcdir`]), per-service options and environment ([`service`]), and
-//! recursive mtime checks ([`mtime`]).  Service state and the dependency
-//! tree come next.
+//! recursive mtime checks ([`mtime`]).  Phase 2 adds runlevels and
+//! service state ([`state`]), daemon tracking ([`daemon`]) and the
+//! dependency tree ([`deptree`]).
 
 pub mod conf;
 pub mod daemon;
+pub mod deptree;
 pub mod dirs;
 pub mod misc;
 pub mod mtime;

@@ -8,12 +8,58 @@
  *
  * Copyright (c) 2026 scottfk; BSD-2-Clause, see LICENSE.
  */
+#define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
+#include <ftw.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <rc.h>
+
+static RC_DEPTREE *tree;
+static time_t age_to;
+
+/* "-" is NULL; otherwise a comma-separated list (empty items kept). */
+static RC_STRINGLIST *mklist(const char *s)
+{
+	RC_STRINGLIST *l;
+	char *buf, *p, *tok;
+
+	if (!strcmp(s, "-"))
+		return NULL;
+	l = rc_stringlist_new();
+	if (!*s)
+		return l;
+	buf = p = strdup(s);
+	while ((tok = strsep(&p, ",")))
+		rc_stringlist_add(l, tok);
+	free(buf);
+	return l;
+}
+
+static void set_age(const char *path, time_t t)
+{
+	struct timespec ts[2] = { { t, 0 }, { t, 0 } };
+	if (utimensat(AT_FDCWD, path, ts, AT_SYMLINK_NOFOLLOW) != 0)
+		printf("age %s: %s\n", path, strerror(errno));
+}
+
+static int age_one(const char *path, const struct stat *st, int flag, struct FTW *f)
+{
+	(void)st; (void)flag; (void)f;
+	set_age(path, age_to);
+	return 0;
+}
+
+static const char *const deptypes[] = {
+	"ineed", "needsme", "iuse", "usesme", "iwant", "wantsme", "iafter", "ibefore",
+	"iprovide", "providedby", "keyword", "broken", "reexport", "config", NULL
+};
 
 static void list(const char *what, RC_STRINGLIST *l)
 {
@@ -196,6 +242,95 @@ static int run(int argc, char **argv)
 		free(pids);
 		printf("\n");
 		return 5;
+	} else if (!strcmp(c, "update")) {
+		B("update", rc_deptree_update());
+		return 1;
+	} else if (!strcmp(c, "update_needed")) {
+		char file[PATH_MAX] = "";
+		time_t newest = -1;
+		bool needed = rc_deptree_update_needed(&newest, file);
+		printf("update_needed: %s newest=%s file=[%s]\n", needed ? "true" : "false",
+		       newest == -1 ? "unset" : "set", file);
+		return 1;
+	} else if (!strcmp(c, "load")) {
+		rc_deptree_free(tree);
+		tree = rc_deptree_load();
+		printf("load: %s\n", tree ? "ok" : "(null)");
+		return 1;
+	} else if (!strcmp(c, "load_file")) {
+		rc_deptree_free(tree);
+		tree = rc_deptree_load_file(a);
+		printf("load_file: %s\n", tree ? "ok" : "(null)");
+		return 2;
+	} else if (!strcmp(c, "depend")) {
+		errno = 0;
+		RC_STRINGLIST *l = rc_deptree_depend(tree, a, b);
+		int e = errno;
+		list("depend", l);
+		if (e)
+			printf("errno=%s\n", strerror(e));
+		return 3;
+	} else if (!strcmp(c, "dump")) {
+		/* dump SVC,SVC...: every non-empty dependency list */
+		RC_STRINGLIST *svcs = mklist(a);
+		RC_STRING *sv;
+		for (sv = svcs->tqh_first; sv; sv = sv->entries.tqe_next)
+			for (const char *const *t = deptypes; *t; t++) {
+				RC_STRINGLIST *l = rc_deptree_depend(tree, sv->value, *t);
+				char what[256];
+				if (!l->tqh_first) {
+					rc_stringlist_free(l);
+					continue;
+				}
+				snprintf(what, sizeof(what), "%s %s", sv->value, *t);
+				list(what, l);
+			}
+		rc_stringlist_free(svcs);
+		return 2;
+	} else if (!strcmp(c, "depends")) {
+		/* depends TYPES SERVICES RUNLEVEL OPTIONS */
+		RC_STRINGLIST *types = mklist(a), *svcs = mklist(b);
+		char what[512];
+		errno = 0;
+		RC_STRINGLIST *l = rc_deptree_depends(tree, types, svcs, nul(argv[3]), atoi(argv[4]));
+		int e = errno;
+		snprintf(what, sizeof(what), "depends %s %s %s %s", a, b, argv[3], argv[4]);
+		list(what, l);
+		if (e == ENOENT)
+			printf("errno=%s\n", strerror(e));
+		rc_stringlist_free(types);
+		rc_stringlist_free(svcs);
+		return 5;
+	} else if (!strcmp(c, "order")) {
+		char what[256];
+		snprintf(what, sizeof(what), "order %s %s", a, b);
+		list(what, rc_deptree_order(tree, a, atoi(b)));
+		return 3;
+	} else if (!strcmp(c, "cat")) {
+		FILE *fp = fopen(a, "r");
+		char buf[4096];
+		size_t n;
+		printf("cat %s:%s\n", a, fp ? "" : " (missing)");
+		if (fp) {
+			while ((n = fread(buf, 1, sizeof(buf), fp)) > 0)
+				fwrite(buf, 1, n, stdout);
+			fclose(fp);
+		}
+		return 2;
+	} else if (!strcmp(c, "age")) {
+		/* age PATH SECS: set the mtime to SECS ago */
+		set_age(a, time(NULL) - atoi(b));
+		return 3;
+	} else if (!strcmp(c, "agetree")) {
+		age_to = time(NULL) - atoi(b);
+		nftw(a, age_one, 16, FTW_PHYS);
+		return 3;
+	} else if (!strcmp(c, "setenv")) {
+		setenv(a, b, 1);
+		return 3;
+	} else if (!strcmp(c, "unsetenv")) {
+		unsetenv(a);
+		return 2;
 	}
 	printf("unknown command %s\n", c);
 	return 1;

@@ -64,6 +64,19 @@ pub fn config_list_at(dir: Option<std::os::fd::BorrowedFd<'_>>, path: &[u8]) -> 
     parse_list(&data)
 }
 
+/// [`config_list_at`] on a raw dirfd as C passes it (-1 fails with EBADF,
+/// giving an empty list).
+pub fn config_list_raw(dirfd: i32, path: &[u8]) -> ConfigList {
+    use std::io::Read;
+
+    use openrc_compat::sys::{self, libc};
+    let Ok(fd) = sys::at::openat(dirfd, path, libc::O_RDONLY, 0o666) else { return Vec::new() };
+    let mut f = std::fs::File::from(fd);
+    let mut data = Vec::new();
+    let _ = f.read_to_end(&mut data);
+    parse_list(&data)
+}
+
 /// `rc_config_list()`: [`config_list_at`] relative to the cwd.
 pub fn rc_config_list(path: &Path) -> ConfigList {
     use std::os::unix::ffi::OsStrExt;

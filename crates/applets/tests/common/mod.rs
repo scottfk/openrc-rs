@@ -448,21 +448,33 @@ pub fn rc_probe() -> Option<PathBuf> {
     if !our_libs_built() {
         return None;
     }
-    let root = repo_root();
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rc-probe");
-    let libdir = refdir.join("librc");
-    let st = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-        .arg("-o")
-        .arg(&out)
-        .arg(root.join("tests/capi/rc-probe.c"))
-        .arg(format!("-I{}", root.join("crates/capi-rc/upstream").display()))
-        .arg(format!("-L{}", libdir.display()))
-        .arg(format!("-Wl,-rpath,{}", libdir.display()))
-        .arg("-lrc")
-        .status()
-        .unwrap();
-    assert!(st.success(), "compiling rc-probe");
-    Some(out)
+    // Compiled once per test process: parallel tests would otherwise
+    // rewrite the binary while another one runs it (ETXTBSY).
+    static PROBE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    Some(
+        PROBE
+            .get_or_init(|| {
+                let root = repo_root();
+                let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+                let out = dir.join("rc-probe");
+                let tmp = dir.join(format!("rc-probe.{}", std::process::id()));
+                let libdir = refdir.join("librc");
+                let st = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
+                    .arg("-o")
+                    .arg(&tmp)
+                    .arg(root.join("tests/capi/rc-probe.c"))
+                    .arg(format!("-I{}", root.join("crates/capi-rc/upstream").display()))
+                    .arg(format!("-L{}", libdir.display()))
+                    .arg(format!("-Wl,-rpath,{}", libdir.display()))
+                    .arg("-lrc")
+                    .status()
+                    .unwrap();
+                assert!(st.success(), "compiling rc-probe");
+                std::fs::rename(&tmp, &out).unwrap();
+                out
+            })
+            .clone(),
+    )
 }
 
 /// Is this test process root?
@@ -525,7 +537,8 @@ fn show(b: &[u8]) -> String {
 }
 
 /// Run every case against both implementations; panic with a report of
-/// all mismatches.
+/// all mismatches.  With `OPENRC_DIFF_DUMP=<dir>`, each case's command and
+/// C output are also saved there.
 pub fn check_all(group: &str, cases: &[Case]) {
     let Some(refdir) = reference_dir() else { return };
     let mut failures = String::new();
@@ -542,6 +555,14 @@ pub fn check_all(group: &str, cases: &[Case]) {
         let got = run(&rbin, case, &name, case.ourlibs);
         if t0.elapsed() > std::time::Duration::from_secs(2) {
             eprintln!("{group}: slow case ({:.1}s for both runs): {}", t0.elapsed().as_secs_f64(), case.describe());
+        }
+        if let Some(dir) = std::env::var_os("OPENRC_DIFF_DUMP") {
+            // For reading what a case actually does: the C run's output.
+            let dir = PathBuf::from(dir);
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(format!("{name}.cmd")), case.describe());
+            let _ = std::fs::write(dir.join(format!("{name}.out")), &want.stdout);
+            let _ = std::fs::write(dir.join(format!("{name}.err")), &want.stderr);
         }
         let after = root_entries();
         assert_eq!(before, after, "{}: case changed / (tests must stay in their sandbox): {}", group, case.describe());

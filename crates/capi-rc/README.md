@@ -24,6 +24,10 @@ differential tests (`crates/applets/tests/diff_librc.rs`, which run C
 OpenRC's programs on both libraries) show whether anything changed. When
 everything is in Rust, `upstream/` is deleted.
 
+After the deptree step, the C half is down to the `rc_stringlist_*`
+functions, `rc_config_value()` (both work on caller-owned C lists) and the
+`rc_environ_fd` variable.
+
 `upstream/` is BSD-2-Clause, copyright the OpenRC authors (see the
 top-level LICENSE). `rc.h` is the header meson generates at the reference
 tag, with the default paths; it is also what `make install` installs.
