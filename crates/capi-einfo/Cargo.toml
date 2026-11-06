@@ -1,0 +1,19 @@
+[package]
+name = "openrc-capi-einfo"
+description = "C ABI for openrc-einfo: a drop-in libeinfo.so.1 (linked by `make`, see README)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "openrc_capi_einfo"
+crate-type = ["staticlib"]
+
+[dependencies]
+openrc-compat.workspace = true
+openrc-einfo.workspace = true
+
+[lints]
+workspace = true

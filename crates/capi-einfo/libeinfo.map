@@ -1,0 +1,11 @@
+/* Exports of libeinfo.so.1, matching upstream 0.64.1 exactly (unversioned:
+ * upstream's einfo.map is only a meson link_depends and never applied). */
+{
+global:
+	ebegin; ebeginv; ebracket; ecolor; eend; eendv; eerror; eerrorn;
+	eerrorx; eindent; eindentv; einfo; einfon; einfov; einfovn; elog;
+	eoutdent; eoutdentv; eprefix; ewarn; ewarnn; ewarnv; ewarnvn; ewarnx;
+	ewend; ewendv;
+local:
+	*;
+};

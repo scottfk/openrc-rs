@@ -1,0 +1,17 @@
+[package]
+name = "openrc-rc"
+description = "Port of OpenRC's librc: configuration, service state, dependency tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "rc"
+
+[dependencies]
+openrc-compat.workspace = true
+
+[lints]
+workspace = true
