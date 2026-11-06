@@ -65,7 +65,7 @@ fn seedrng() {
     let mut cases = vec![
         Case::new("seedrng", &["-h"]),
         Case::new("seedrng", &["--bogus"]),
-        Case::new("seedrng", &["--seed-dir=/nonexistent"]),
+        Case::new("seedrng", &["--seed-dir=/proc/openrc-rs-nonexistent"]),
         Case::new("seedrng", &["--seed-dir", "$ROOT/new"]).sandbox(s).ns(root()),
         Case::new("seedrng", &["--seed-dir", "$ROOT/seeds"]).sandbox(s).ns(root()),
         Case::new("seedrng", &["--seed-dir", "$ROOT/seeds", "--skip-credit"]).sandbox(s).ns(root()),

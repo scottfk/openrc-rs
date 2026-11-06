@@ -5,6 +5,10 @@
 //! the resulting filesystem tree.  Both run with the same `argv[0]`, a
 //! clean environment, and the same sandbox path, one after the other.
 //!
+//! Cases without a sandbox must not create anything: they also run as
+//! root on the VM test bed.  For "missing" paths use ones that cannot be
+//! created even by root, e.g. under /proc (`/proc/openrc-rs-nonexistent`).
+//!
 //! The reference is built by `tools/build-reference.sh` (`make reference`).
 //! Without it these tests are skipped, unless `OPENRC_REF_REQUIRED=1`.
 

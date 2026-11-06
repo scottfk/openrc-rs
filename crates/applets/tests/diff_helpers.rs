@@ -131,7 +131,7 @@ fn value_applets() {
     };
     let mut cases = vec![
         Case::new("service_get_value", &["port"]),
-        Case::new("service_export", &["X"]).env("RC_SVCDIR", "/nonexistent"),
+        Case::new("service_export", &["X"]).env("RC_SVCDIR", "/proc/openrc-rs-nonexistent"),
         svc("service_get_value", &[]),
         svc("service_get_value", &[""]),
         svc("service_export", &[]),
@@ -144,7 +144,9 @@ fn value_applets() {
         Case::new("service_export", &["HOME"]).sandbox(t).env("RC_SVCDIR", "$ROOT/no/such").env("RC_SVCNAME", "x"),
     ];
     for get in ["service_get_value", "get_options"] {
-        for opt in ["port", "empty", "nul", "multi", "missing", "adir", "../environ/sshd/ALREADY"] {
+        // Not "adir": C reads a directory option through a freed buffer
+        // (undefined behaviour; see QUIRKS.md), so its output varies.
+        for opt in ["port", "empty", "nul", "multi", "missing", "../environ/sshd/ALREADY"] {
             cases.push(svc(get, &[opt]));
         }
     }
