@@ -69,9 +69,10 @@ impl Usage {
 
         let help = self.longopts_help.iter().chain(LONGOPTS_HELP_COMMON);
         for (opt, help) in self.all_longopts().iter().zip(help) {
-            let short = match u8::try_from(opt.val & 0xff) {
-                // isprint() in the C locale
-                Ok(c @ 0x20..=0x7e) => format!("-{},", c as char),
+            // isprint(val) in the C locale, on the whole int: long-only
+            // options (seedrng's 0x101...) get no short form.
+            let short = match opt.val {
+                c @ 0x20..=0x7e => format!("-{},", c as u8 as char),
                 _ => String::new(),
             };
             let has_arg = HAS_ARG[match opt.has_arg {

@@ -73,6 +73,10 @@ pub struct Case {
     pub bins: Option<(PathBuf, PathBuf)>,
     /// Run in a private user + mount namespace (see [`Ns`]).
     pub ns: Option<Ns>,
+    /// Run as PID 1 of a fresh user + PID namespace (with its own /proc),
+    /// after this bash prelude has run there.  For programs that signal
+    /// "every process" (kill_all): nothing outside the namespace is visible.
+    pub pidns: Option<&'static str>,
 }
 
 /// Namespace setup for a case.  The child becomes root of a new user
@@ -98,6 +102,7 @@ impl Case {
             setup: None,
             bins: None,
             ns: None,
+            pidns: None,
         }
     }
     pub fn env(self, k: &str, v: &str) -> Case {
@@ -105,6 +110,10 @@ impl Case {
     }
     pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
         self.env.push((k.into(), v.to_vec()));
+        self
+    }
+    pub fn pidns(mut self, prelude: &'static str) -> Case {
+        self.pidns = Some(prelude);
         self
     }
     pub fn ns(mut self, ns: Ns) -> Case {
@@ -203,9 +212,23 @@ fn reset_sandbox(dir: &Path) {
 }
 
 fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
-    let mut cmd = Command::new(bin);
-    cmd.arg0(case.applet);
     let root_s = root.map(|r| r.display().to_string()).unwrap_or_default();
+    let mut cmd = match case.pidns {
+        None => {
+            let mut c = Command::new(bin);
+            c.arg0(case.applet);
+            c
+        }
+        Some(prelude) => {
+            // unshare forks, so bash is PID 1; it runs the prelude and then
+            // execs the program (which becomes PID 1) under argv[0].
+            let mut c = Command::new("/usr/bin/unshare");
+            c.args(["--user", "--map-root-user", "--pid", "--fork", "--mount", "--mount-proc", "/bin/bash", "-c"]);
+            c.arg(format!("{prelude}\nexec -a {} \"$0\" \"$@\"", case.applet));
+            c.arg(bin);
+            c
+        }
+    };
     cmd.args(case.args.iter().map(|a| a.replace("$ROOT", &root_s)));
     cmd.env_clear().env("PATH", "/usr/bin:/bin");
     for (k, v) in &case.env {

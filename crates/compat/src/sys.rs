@@ -553,3 +553,113 @@ pub fn realpath(path: &[u8]) -> Option<Vec<u8>> {
     use std::os::unix::ffi::OsStrExt;
     std::fs::canonicalize(crate::bytes::as_path(path)).ok().map(|p| p.as_os_str().as_bytes().to_vec())
 }
+
+/// `flock(fd, op)`.
+pub fn flock(fd: BorrowedFd<'_>, op: i32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::flock(fd.as_raw_fd(), op) }).map(drop)
+}
+
+/// `fsync(fd)`.
+pub fn fsync(fd: BorrowedFd<'_>) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::fsync(fd.as_raw_fd()) }).map(drop)
+}
+
+/// `renameat(dirfd, old, dirfd, new)` within one directory.
+pub fn renameat(dir: BorrowedFd<'_>, old: &[u8], new: &[u8]) -> Result<(), Errno> {
+    let (old, new) = (to_cstring(old), to_cstring(new));
+    // SAFETY: valid C strings.
+    cvt(unsafe { libc::renameat(dir.as_raw_fd(), old.as_ptr(), dir.as_raw_fd(), new.as_ptr()) }).map(drop)
+}
+
+/// One `getrandom(buf, flags)` call.
+pub fn getrandom(buf: &mut [u8], flags: u32) -> Result<usize, Errno> {
+    // SAFETY: buf is valid for its length.
+    let n = unsafe { libc::getrandom(buf.as_mut_ptr().cast(), buf.len(), flags) };
+    if n < 0 { Err(Errno::last()) } else { Ok(n as usize) }
+}
+
+/// One `write(2)`.
+pub fn write_once(fd: BorrowedFd<'_>, buf: &[u8]) -> Result<usize, Errno> {
+    // SAFETY: buf is valid for its length.
+    let n = unsafe { libc::write(fd.as_raw_fd(), buf.as_ptr().cast(), buf.len()) };
+    if n < 0 { Err(Errno::last()) } else { Ok(n as usize) }
+}
+
+/// `poll()` on one fd for `events` with timeout 0: the C return value.
+pub fn poll_now(fd: BorrowedFd<'_>, events: i16) -> i32 {
+    let mut p = libc::pollfd { fd: fd.as_raw_fd(), events, revents: 0 };
+    // SAFETY: one valid pollfd.
+    unsafe { libc::poll(&mut p, 1, 0) }
+}
+
+/// `ioctl(fd, RNDADDENTROPY, {entropy_count, buf_size, buffer})`.
+pub fn rnd_add_entropy(fd: BorrowedFd<'_>, entropy_bits: i32, data: &[u8]) -> Result<(), Errno> {
+    // struct rand_pool_info as laid out by seedrng.c (buffer[MAX_SEED_LEN]).
+    #[repr(C)]
+    struct Req {
+        entropy_count: i32,
+        buf_size: i32,
+        buffer: [u8; 512],
+    }
+    // _IOW('R', 0x03, int[2])
+    const RNDADDENTROPY: libc::c_ulong = 0x4008_5203;
+    let mut req = Req { entropy_count: entropy_bits, buf_size: data.len() as i32, buffer: [0; 512] };
+    req.buffer[..data.len()].copy_from_slice(data);
+    // SAFETY: req is a valid rand_pool_info with buf_size bytes of buffer.
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), RNDADDENTROPY, &req) }).map(drop)
+}
+
+/// `clock_gettime(clock)` as the raw `struct timespec` bytes (seedrng
+/// hashes the struct's memory).
+pub fn timespec_bytes(clock: libc::clockid_t) -> [u8; 16] {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: ts is valid.
+    unsafe { libc::clock_gettime(clock, &mut ts) };
+    let mut out = [0u8; 16];
+    out[..8].copy_from_slice(&ts.tv_sec.to_ne_bytes());
+    out[8..].copy_from_slice(&ts.tv_nsec.to_ne_bytes());
+    out
+}
+
+/// `chdir(path)`.
+pub fn chdir(path: &[u8]) -> Result<(), Errno> {
+    let path = to_cstring(path);
+    // SAFETY: valid C string.
+    cvt(unsafe { libc::chdir(path.as_ptr()) }).map(drop)
+}
+
+/// Block every signal; returns the previous mask for [`restore_sigmask`].
+pub fn block_all_signals() -> libc::sigset_t {
+    // SAFETY: sigset_t is plain data, initialised by sigfillset/sigprocmask.
+    unsafe {
+        let mut full: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut full);
+        libc::sigemptyset(&mut old);
+        libc::sigprocmask(libc::SIG_SETMASK, &full, &mut old);
+        old
+    }
+}
+
+/// Restore a mask saved by [`block_all_signals`].
+pub fn restore_sigmask(old: &libc::sigset_t) {
+    // SAFETY: old is a valid sigset_t.
+    unsafe { libc::sigprocmask(libc::SIG_SETMASK, old, std::ptr::null_mut()) };
+}
+
+/// `openlog(ident, option, facility)`, keeping `ident` alive for good
+/// (syslog keeps the pointer).
+pub fn openlog(ident: &[u8], option: i32, facility: i32) {
+    let ident: &'static std::ffi::CStr = Box::leak(to_cstring(ident).into_boxed_c_str());
+    // SAFETY: ident lives forever.
+    unsafe { libc::openlog(ident.as_ptr(), option, facility) }
+}
+
+/// `syslog(priority, "%s", msg)` with the current openlog settings.
+pub fn syslog(priority: i32, msg: &[u8]) {
+    let msg = to_cstring(msg);
+    // SAFETY: well-formed format and argument.
+    unsafe { libc::syslog(priority, c"%s".as_ptr(), msg.as_ptr()) }
+}

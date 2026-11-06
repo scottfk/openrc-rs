@@ -75,7 +75,8 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
 1. **Leaf utilities** (in progress)
    - [x] `einfo` family (21 applets), `checkpath`
    - [x] `libeinfo.so.1` C ABI
-   - [ ] `mountinfo`, `fstabinfo`, `is_newer_than`/`is_older_than`, `shell_var`, `kill_all`, `on_ac_power`, `seedrng`, `swclock`, `value`, `rc-sstat`
+   - [x] `mountinfo`/`do_unmount`, `fstabinfo`, `is_newer_than`/`is_older_than`, `shell_var`, `kill_all`, `seedrng`, `swclock`, and the `value` applets (`service_get_value` & co)
+   - (`on_ac_power` and `rc-sstat` are shell scripts upstream: nothing to port)
 2. **rc-core** (`librc`): service state, runlevels, dependency tree and deptree cache, `librc.so.1`.
 3. **Query and admin tools:** `rc-status`, `rc-update`, `rc-service`, `rc-depend`, `service`, `mark_service_*`.
 4. **`openrc-run`**

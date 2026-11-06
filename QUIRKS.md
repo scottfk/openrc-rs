@@ -38,6 +38,14 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | medium | `is_older_than SRC TGT...` never checks "older": like `is_newer_than` it calls `rc_newer_than`, and succeeds as soon as any TGT contains something newer than SRC. Upstream's comment calls it "perverted", for compatibility with baselayout. | `applets/newer.rs` |
 | low | `is_newer_than` passes on equal mtimes, so a file is "newer than" itself. Only whole seconds are compared. | `rc/mtime.rs` |
 
+## kill_all
+
+| Severity | Quirk | Where |
+|---|---|---|
+| **high** | Even with `--dry-run`, kill_all runs `kill(-1, SIGSTOP)` first, freezing every process it is allowed to signal, and resumes them all with SIGCONT at the end. Run unprivileged, that's the caller's whole desktop session. The tests only run it as PID 1 of a private PID namespace. | `applets/kill_all.rs` |
+| medium | PID 2 is always taken to be kthreadd, and so never signalled. In a container or PID namespace, PID 2 is an ordinary process, and so is everything descended from it. | `applets/kill_all.rs` |
+| low | `-o` pids are compared as strings exactly as given, so `-o 007` doesn't omit PID 7. | `applets/kill_all.rs` |
+
 ## mountinfo / do_unmount / fstabinfo
 
 | Severity | Quirk | Where |
