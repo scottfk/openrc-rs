@@ -61,7 +61,7 @@ fn with_env(c: Case) -> Case {
 }
 
 fn fstab_ns() -> Ns {
-    Ns { fstab: Some(FSTAB.into()), tmpfs: vec![] }
+    Ns { fstab: Some(FSTAB.into()), tmpfs: vec![], ..Default::default() }
 }
 
 fn mounts_ns() -> Ns {
@@ -75,6 +75,7 @@ fn mounts_ns() -> Ns {
             "$ROOT/stuck".into(),
             "$ROOT/sp ace".into(),
         ],
+        ..Default::default()
     }
 }
 
@@ -122,7 +123,7 @@ fn fstabinfo() {
         fi(&["-R", "-q", "/boot", "/missing"]).env("FAKE_MOUNT_EXIT", "1"),
         fi(&["-M", "/home"]).env("PATH", "/nonexistent"),
     ];
-    let empty = Ns { fstab: Some("# nothing\n\n".into()), tmpfs: vec![] };
+    let empty = Ns { fstab: Some("# nothing\n\n".into()), tmpfs: vec![], ..Default::default() };
     cases.push(with_env(Case::new("fstabinfo", &[]).sandbox(tools).ns(empty.clone())));
     cases.push(with_env(Case::new("fstabinfo", &["/home"]).sandbox(tools).ns(empty)));
     common::check_all("fstabinfo", &cases);

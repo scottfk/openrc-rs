@@ -82,6 +82,11 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   /proc/mounts line with fewer than four fields (C dereferences NULL; we
   use empty fields), and `waitpid` failing in fstabinfo (C reads an
   uninitialised status; we report -1).
+- **`librc.so.1` on C's undefined-behaviour paths:** where C frees a
+  caller's buffer and leaves it dangling, we set it to NULL. That's
+  `rc_getfile()` when a read fails, and `rc_service_getenv()` when the
+  value can't be opened after the buffer was resized (there C leaves the
+  old pointer).
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with

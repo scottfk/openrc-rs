@@ -10,35 +10,28 @@ use std::sync::Mutex;
 
 use openrc_compat::bytes::{as_path, c_str_prefix};
 
-use crate::dirs::{rc_is_user, rc_scriptdirs};
+use crate::dirs::rc_is_user;
 use crate::misc::rc_proc_getent;
 use crate::paths::rc_conf_old;
 
 /// An `RC_STRINGLIST` of `key=value` entries, in order.
 pub type ConfigList = Vec<Vec<u8>>;
 
-/// Read a file as `getline()` would: lines without their `\n`, each cut at
-/// its first NUL (C string semantics).  Read errors end the input, as when
-/// `getline` fails on a directory.
-fn read_lines(path: &Path) -> Option<Vec<Vec<u8>>> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut data = Vec::new();
-    // A directory opens fine but fails to read: treat as empty, like C.
-    let _ = f.read_to_end(&mut data);
+/// Split file contents as `getline()` would: lines without their `\n`,
+/// each cut at its first NUL (C string semantics).
+fn split_lines(data: &[u8]) -> Vec<Vec<u8>> {
     let mut lines: Vec<Vec<u8>> = data.split(|&b| b == b'\n').map(|l| c_str_prefix(l).to_vec()).collect();
     if data.ends_with(b"\n") || data.is_empty() {
         lines.pop();
     }
-    Some(lines)
+    lines
 }
 
-/// `config_list()` / `rc_config_list()`: the assignment lines of a file,
-/// with leading blanks and `#` comments stripped (values are not unquoted).
-pub fn rc_config_list(path: &Path) -> ConfigList {
-    let Some(lines) = read_lines(path) else { return Vec::new() };
+/// The parsing half of `config_list()`: keep assignment lines, with
+/// leading blanks and `#` comments stripped (values are not unquoted).
+fn parse_list(data: &[u8]) -> ConfigList {
     let mut list = Vec::new();
-    for line in lines {
+    for line in split_lines(data) {
         let start = line.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(line.len());
         let p = &line[start..];
         // QUIRK: everything after the first '#' is dropped, even inside quotes.
@@ -55,6 +48,26 @@ pub fn rc_config_list(path: &Path) -> ConfigList {
         }
     }
     list
+}
+
+/// `config_list(dirfd, path)`: the assignment lines of a file, opened
+/// relative to `dir` (`None` = AT_FDCWD).  Read errors end the input, as
+/// when `getline` fails on a directory; a missing file gives no lines.
+pub fn config_list_at(dir: Option<std::os::fd::BorrowedFd<'_>>, path: &[u8]) -> ConfigList {
+    use std::io::Read;
+
+    use openrc_compat::sys::{self, libc};
+    let Ok(fd) = sys::openat(dir, path, libc::O_RDONLY, 0o666) else { return Vec::new() };
+    let mut f = std::fs::File::from(fd);
+    let mut data = Vec::new();
+    let _ = f.read_to_end(&mut data);
+    parse_list(&data)
+}
+
+/// `rc_config_list()`: [`config_list_at`] relative to the cwd.
+pub fn rc_config_list(path: &Path) -> ConfigList {
+    use std::os::unix::ffi::OsStrExt;
+    config_list_at(None, path.as_os_str().as_bytes())
 }
 
 /// Index of the first entry for `key` (`key=...`).
@@ -123,13 +136,17 @@ pub fn rc_config_value<'a>(list: &'a ConfigList, key: &str) -> Option<&'a [u8]> 
     find_key(list, key.as_bytes()).map(|i| &list[i][key.len() + 1..])
 }
 
-/// `rc_config_directory()`: merge `dir/*.conf`, in sorted order.
-fn config_directory(config: &mut ConfigList, dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+/// `rc_config_directory()`: merge `<dir>/rc.conf.d/*.conf`, in sorted order.
+fn config_directory(config: &mut ConfigList, dir: std::os::fd::BorrowedFd<'_>) {
+    use std::os::fd::AsFd;
+
+    use openrc_compat::sys::{self, libc};
+    // do_opendirat(): openat(O_RDONLY | O_DIRECTORY).
+    let Ok(dfd) = sys::openat(Some(dir), b"rc.conf.d", libc::O_RDONLY | libc::O_DIRECTORY, 0) else { return };
+    let Ok(dup) = dfd.try_clone() else { return };
+    let Ok(names) = sys::readdir_names(dup) else { return };
     let mut files: Vec<Vec<u8>> = Vec::new();
-    for e in rd.flatten() {
-        use std::os::unix::ffi::OsStrExt;
-        let name = e.file_name().as_bytes().to_vec();
+    for name in names {
         // fnmatch("*.conf", name, FNM_PATHNAME); dotfiles match too.
         if name.ends_with(b".conf") && !files.contains(&name) {
             files.push(name);
@@ -137,9 +154,7 @@ fn config_directory(config: &mut ConfigList, dir: &Path) {
     }
     files.sort();
     for name in files {
-        use std::os::unix::ffi::OsStrExt;
-        let path = dir.join(std::ffi::OsStr::from_bytes(&name));
-        for line in rc_config_list(&path) {
+        for line in config_list_at(Some(dfd.as_fd()), &name) {
             set_value(config, &line);
         }
     }
@@ -170,16 +185,21 @@ static RC_CONF: Mutex<Option<ConfigList>> = Mutex::new(None);
 fn load_rc_conf() -> ConfigList {
     let mut conf: ConfigList = Vec::new();
     // rc_scriptdirfds() silently skips directories that cannot be opened.
-    let dirs: Vec<Vec<u8>> = rc_scriptdirs().into_iter().filter(|d| as_path(d).is_dir()).collect();
+    let dirs = crate::dirs::rc_scriptdirfds();
     // Upstream says "load configs in reverse order, so earlier entries
     // override later ones", but rc.conf files are concatenated and lookup
     // takes the first match.  QUIRK: so for keys set in more than one
     // rc.conf, the *lowest*-priority directory wins (rc.conf.d entries do
     // replace in place).
-    for dir in dirs.iter().rev() {
-        let dir = as_path(dir);
-        conf.extend(rc_config_load(&dir.join("rc.conf")));
-        config_directory(&mut conf, &dir.join("rc.conf.d"));
+    for &fd in dirs.iter().rev() {
+        // SAFETY: the script dir fds stay open for the life of the process.
+        let dir = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        let mut loaded = Vec::new();
+        for line in config_list_at(Some(dir), b"rc.conf") {
+            set_value(&mut loaded, &line);
+        }
+        conf.extend(loaded);
+        config_directory(&mut conf, dir);
     }
 
     // Support old configs.
@@ -198,6 +218,11 @@ fn load_rc_conf() -> ConfigList {
             }
             b.make_ascii_lowercase();
         }
+        // The C ABI hands out pointers into these strings (rc_conf_value),
+        // so keep a NUL just past the end.  The cache is never resized
+        // after loading, so the buffers never move.
+        line.reserve_exact(1);
+        line.spare_capacity_mut()[0].write(0);
     }
     conf
 }
@@ -207,6 +232,17 @@ pub fn with_rc_conf<R>(f: impl FnOnce(&mut ConfigList) -> R) -> R {
     let mut guard = RC_CONF.lock().unwrap_or_else(|e| e.into_inner());
     let conf = guard.get_or_insert_with(load_rc_conf);
     f(conf)
+}
+
+/// `rc_conf_value()` for the C ABI: a pointer to the NUL-terminated value
+/// inside the cache, valid for the life of the process (the C function
+/// returns a pointer into its cache too, which callers must not free).
+pub fn rc_conf_value_ptr(setting: &str) -> Option<*const u8> {
+    with_rc_conf(|c| {
+        let i = find_key(c, setting.as_bytes())?;
+        // SAFETY: in bounds (the key and '=' precede the value).
+        Some(unsafe { c[i].as_ptr().add(setting.len() + 1) })
+    })
 }
 
 /// `rc_conf_value()`: a setting from `rc.conf` (and `rc.conf.d`, the old

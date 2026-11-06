@@ -1,0 +1,20 @@
+[package]
+name = "openrc-capi-rc"
+description = "C ABI for openrc-rc: a drop-in librc.so.1 (linked by `make`, see crates/capi-rc/README.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "openrc_capi_rc"
+crate-type = ["staticlib"]
+
+[dependencies]
+libc.workspace = true
+openrc-compat.workspace = true
+openrc-rc.workspace = true
+
+[lints]
+workspace = true

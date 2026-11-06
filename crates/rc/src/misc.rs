@@ -3,8 +3,20 @@
 /// `rc_yesno()`: true for yes/y/true/1 (case-insensitive).  Unlike
 /// libeinfo's private version, on/off are *not* recognised.
 pub fn rc_yesno(value: Option<&[u8]>) -> bool {
-    let Some(v) = value else { return false };
-    ["yes", "y", "true", "1"].iter().any(|w| v.eq_ignore_ascii_case(w.as_bytes()))
+    rc_yesno_errno(value).0
+}
+
+/// [`rc_yesno`] plus the `errno` the C function sets: ENOENT for a NULL
+/// value, EINVAL for something that is neither yes nor no, untouched
+/// (`None`) otherwise.  C callers test errno to tell "no" from "unset".
+pub fn rc_yesno_errno(value: Option<&[u8]>) -> (bool, Option<i32>) {
+    use openrc_compat::sys::libc;
+    let Some(v) = value else { return (false, Some(libc::ENOENT)) };
+    let is = |w: &&str| v.eq_ignore_ascii_case(w.as_bytes());
+    if ["yes", "y", "true", "1"].iter().any(is) {
+        return (true, None);
+    }
+    if ["no", "n", "false", "0"].iter().any(is) { (false, None) } else { (false, Some(libc::EINVAL)) }
 }
 
 /// `rc_getfile()`: a whole file, read as `st_size` bytes.

@@ -33,7 +33,8 @@ pub fn main(applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
     match action {
         Action::Get => match service::rc_service_value_get(&svc, &args[1]) {
             Some(v) => {
-                stdio::out(&v);
+                // printf("%s", option)
+                stdio::out(openrc_compat::bytes::c_str_prefix(&v));
                 0
             }
             None => 1,

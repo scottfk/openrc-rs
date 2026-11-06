@@ -27,6 +27,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "openrc-capi-rc"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "openrc-compat",
+ "openrc-rc",
+]
+
+[[package]]
 name = "openrc-compat"
 version = "0.1.0"
 dependencies = [

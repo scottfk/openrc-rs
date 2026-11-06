@@ -72,6 +72,49 @@ pub fn rc_set_user() {
     d.svcdir = Some(bcat!(rt, "/openrc"));
     let path = load_dynamic_path(&d, true);
     d.scriptdirs = Some(path);
+    drop(d);
+    crate::svcdir::clear_dirfds();
+}
+
+/// `rc_sysconfdir()`.
+pub fn rc_sysconfdir() -> &'static str {
+    crate::paths::SYSCONFDIR
+}
+
+/// `rc_usrconfdir()`: the user-mode config dir, if in user mode.
+pub fn rc_usrconfdir() -> Option<Vec<u8>> {
+    dirs().confdir.clone()
+}
+
+/// `rc_runleveldir()`: the user-mode runlevel dir, else `$SYSCONFDIR/runlevels`.
+pub fn rc_runleveldir() -> Vec<u8> {
+    dirs().runleveldir.clone().unwrap_or_else(|| format!("{}/runlevels", crate::paths::SYSCONFDIR).into_bytes())
+}
+
+/// `rc_scriptdirfds()`: fds for the script directories that could be
+/// opened.  QUIRK: computed once (on the first call that opens any) and
+/// never refreshed, even after `rc_set_user()`.
+pub fn rc_scriptdirfds() -> &'static [i32] {
+    static FDS: Mutex<Option<&'static [i32]>> = Mutex::new(None);
+    let mut cached = FDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(fds) = *cached {
+        return fds;
+    }
+    let mut fds = Vec::new();
+    for d in rc_scriptdirs() {
+        let flags = openrc_compat::sys::libc::O_RDONLY
+            | openrc_compat::sys::libc::O_DIRECTORY
+            | openrc_compat::sys::libc::O_CLOEXEC;
+        if let Ok(fd) = openrc_compat::sys::openat(None, &d, flags, 0) {
+            fds.push(std::os::fd::IntoRawFd::into_raw_fd(fd));
+        }
+    }
+    let fds: &'static [i32] = Box::leak(fds.into_boxed_slice());
+    // C's `static size_t len` stays 0 if nothing opened, so it retries.
+    if !fds.is_empty() {
+        *cached = Some(fds);
+    }
+    fds
 }
 
 /// Split on `:` like upstream's `strnsep()` (empty elements kept).
