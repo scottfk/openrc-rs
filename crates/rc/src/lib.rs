@@ -1,14 +1,19 @@
 //! Port of OpenRC's `librc` (`src/librc/`).
 //!
 //! Phase 1 covers what the first applets need: `rc.conf` parsing
-//! ([`conf`]), user mode and the script search path ([`dirs`]), and
-//! container/VM detection ([`sys`]).  Service state and the dependency tree
-//! come next.
+//! ([`conf`]), user mode and the script search path ([`dirs`]),
+//! container/VM detection ([`sys`]), the service state directory
+//! ([`svcdir`]), per-service options and environment ([`service`]), and
+//! recursive mtime checks ([`mtime`]).  Service state and the dependency
+//! tree come next.
 
 pub mod conf;
 pub mod dirs;
 pub mod misc;
+pub mod mtime;
 pub mod paths;
+pub mod service;
+pub mod svcdir;
 pub mod sys;
 
 pub use conf::rc_conf_value;

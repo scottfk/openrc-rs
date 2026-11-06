@@ -37,6 +37,11 @@ pub fn rc_is_user() -> bool {
     }
 }
 
+/// The svcdir set by `rc_set_user`, if in user mode.
+pub(crate) fn user_svcdir() -> Option<Vec<u8>> {
+    dirs().svcdir.clone()
+}
+
 /// `rc_set_user()`: switch to user-services mode (`-U`).  Exits if the XDG
 /// directories it needs cannot be determined.
 pub fn rc_set_user() {

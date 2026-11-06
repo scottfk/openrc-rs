@@ -5,6 +5,10 @@
 //! the resulting filesystem tree.  Both run with the same `argv[0]`, a
 //! clean environment, and the same sandbox path, one after the other.
 //!
+//! Cases without a sandbox must not create anything: they also run as
+//! root on the VM test bed.  For "missing" paths use ones that cannot be
+//! created even by root, e.g. under /proc (`/proc/openrc-rs-nonexistent`).
+//!
 //! The reference is built by `tools/build-reference.sh` (`make reference`).
 //! Without it these tests are skipped, unless `OPENRC_REF_REQUIRED=1`.
 
@@ -39,12 +43,19 @@ pub fn reference_dir() -> Option<PathBuf> {
     None
 }
 
-/// Where the reference installs-from-build an applet.
+/// Where the reference build puts an applet: `src/<dir>/<applet>`, where
+/// multi-name programs share their source directory's name.
 fn reference_bin(refdir: &Path, applet: &str) -> PathBuf {
-    match applet {
-        "checkpath" => refdir.join("checkpath/checkpath"),
-        _ => refdir.join("einfo").join(applet),
-    }
+    const SHARED: &[(&str, &[&str])] = &[
+        ("value", &["service_get_value", "service_set_value", "service_export", "get_options", "save_options"]),
+        ("mountinfo", &["do_unmount"]),
+    ];
+    let dir = SHARED
+        .iter()
+        .find(|(_, names)| names.contains(&applet))
+        .map(|(d, _)| *d)
+        .unwrap_or_else(|| if refdir.join(applet).join(applet).exists() { applet } else { "einfo" });
+    refdir.join(dir).join(applet)
 }
 
 /// One differential test case.
@@ -64,6 +75,24 @@ pub struct Case {
     pub setup: Option<fn(&Path)>,
     /// Explicit (C, Rust) programs instead of the applet's binaries.
     pub bins: Option<(PathBuf, PathBuf)>,
+    /// Run in a private user + mount namespace (see [`Ns`]).
+    pub ns: Option<Ns>,
+    /// Run as PID 1 of a fresh user + PID namespace (with its own /proc),
+    /// after this bash prelude has run there.  For programs that signal
+    /// "every process" (kill_all): nothing outside the namespace is visible.
+    pub pidns: Option<&'static str>,
+}
+
+/// Namespace setup for a case.  The child becomes root of a new user
+/// namespace with its own mount namespace, so fixtures can be mounted
+/// without privileges and without affecting the host.
+#[derive(Clone, Debug, Default)]
+pub struct Ns {
+    /// Contents for a fixture bind-mounted over /etc/fstab (`$ROOT` expanded).
+    pub fstab: Option<String>,
+    /// tmpfs mounts to create, in order (`$ROOT` expanded); each mount
+    /// point is created (mkdir) just before mounting.
+    pub tmpfs: Vec<String>,
 }
 
 impl Case {
@@ -76,6 +105,8 @@ impl Case {
             syslog: false,
             setup: None,
             bins: None,
+            ns: None,
+            pidns: None,
         }
     }
     pub fn env(self, k: &str, v: &str) -> Case {
@@ -83,6 +114,14 @@ impl Case {
     }
     pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
         self.env.push((k.into(), v.to_vec()));
+        self
+    }
+    pub fn pidns(mut self, prelude: &'static str) -> Case {
+        self.pidns = Some(prelude);
+        self
+    }
+    pub fn ns(mut self, ns: Ns) -> Case {
+        self.ns = Some(ns);
         self
     }
     pub fn syslog(mut self) -> Case {
@@ -177,16 +216,99 @@ fn reset_sandbox(dir: &Path) {
 }
 
 fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
-    let mut cmd = Command::new(bin);
-    cmd.arg0(case.applet);
     let root_s = root.map(|r| r.display().to_string()).unwrap_or_default();
+    let mut cmd = match case.pidns {
+        None => {
+            let mut c = Command::new(bin);
+            c.arg0(case.applet);
+            c
+        }
+        Some(prelude) => {
+            // unshare forks, so bash is PID 1; it runs the prelude and then
+            // execs the program (which becomes PID 1) under argv[0].
+            let mut c = Command::new("/usr/bin/unshare");
+            c.args(["--user", "--map-root-user", "--pid", "--fork", "--mount", "--mount-proc", "/bin/bash", "-c"]);
+            c.arg(format!("{prelude}\nexec -a {} \"$0\" \"$@\"", case.applet));
+            c.arg(bin);
+            c
+        }
+    };
     cmd.args(case.args.iter().map(|a| a.replace("$ROOT", &root_s)));
     cmd.env_clear().env("PATH", "/usr/bin:/bin");
     for (k, v) in &case.env {
         cmd.env(k, osstr_bytes(&replace_bytes(v, b"$ROOT", root_s.as_bytes())));
     }
     cmd.current_dir(root.unwrap_or(Path::new("/")));
+    if let Some(ns) = &case.ns {
+        enter_ns_before_exec(&mut cmd, ns, &root_s, root);
+    }
     cmd
+}
+
+/// Arrange for the child to enter a fresh user+mount namespace and set up
+/// `ns` before exec.  Everything the child needs is allocated here: after
+/// fork (in a multi-threaded test process) it may only make raw syscalls.
+fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&Path>) {
+    use std::ffi::CString;
+    // SAFETY: getuid/getgid cannot fail.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let uid_map = format!("0 {uid} 1");
+    let gid_map = format!("0 {gid} 1");
+    let fstab_src = ns.fstab.as_ref().map(|contents| {
+        let dir = root.expect("fstab fixture needs a sandbox");
+        let f = dir.with_extension("fstab");
+        std::fs::write(&f, contents.replace("$ROOT", root_s)).unwrap();
+        CString::new(f.display().to_string()).unwrap()
+    });
+    let tmpfs: Vec<CString> = ns.tmpfs.iter().map(|t| CString::new(t.replace("$ROOT", root_s)).unwrap()).collect();
+
+    fn write_file(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
+        // SAFETY: valid C string and buffer.
+        unsafe {
+            let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+            if fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let n = libc::write(fd, data.as_ptr().cast(), data.len());
+            libc::close(fd);
+            if n < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+        }
+    }
+    fn check(r: libc::c_int) -> std::io::Result<()> {
+        if r < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+    }
+
+    // SAFETY: the closure only makes async-signal-safe syscalls on data
+    // prepared above.
+    unsafe {
+        cmd.pre_exec(move || {
+            check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
+            write_file(c"/proc/self/setgroups", b"deny")?;
+            write_file(c"/proc/self/uid_map", uid_map.as_bytes())?;
+            write_file(c"/proc/self/gid_map", gid_map.as_bytes())?;
+            check(libc::mount(
+                std::ptr::null(),
+                c"/".as_ptr(),
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ))?;
+            if let Some(src) = &fstab_src {
+                check(libc::mount(
+                    src.as_ptr(),
+                    c"/etc/fstab".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND,
+                    std::ptr::null(),
+                ))?;
+            }
+            for t in &tmpfs {
+                libc::mkdir(t.as_ptr(), 0o755);
+                check(libc::mount(c"tmpfs".as_ptr(), t.as_ptr(), c"tmpfs".as_ptr(), 0, c"size=1m".as_ptr().cast()))?;
+            }
+            Ok(())
+        });
+    }
 }
 
 /// Run on a pty: returns (merged output, status).
