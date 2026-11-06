@@ -12,8 +12,6 @@
 //! next call, not a different code path), and directory listings keep
 //! readdir order (including `.` and `..` where C walks them).
 
-use std::sync::OnceLock;
-
 use openrc_compat::bcat;
 use openrc_compat::bytes::basename_c;
 use openrc_compat::exec::{ExecArgs, Redirect, do_exec, rc_waitpid};
@@ -61,16 +59,6 @@ fn dirfd(dir: Option<RcDir>) -> i32 {
 /// `rc_parse_service_state_dirfd()` + `rc_dirfd()`.
 fn state_dirfd(state: i32) -> i32 {
     dirfd(STATE_NAMES.iter().find(|(s, _, _)| *s == state).and_then(|(_, d, _)| *d))
-}
-
-/// Hook for `rc_service_daemons_crashed()` (librc-daemon.c), which is
-/// still C until Phase 2 step 3: `(crashed, errno)`.  The C ABI library
-/// installs it; without it, nothing counts as crashed.
-pub type CrashedHook = fn(&[u8]) -> (bool, i32);
-static DAEMONS_CRASHED: OnceLock<CrashedHook> = OnceLock::new();
-
-pub fn set_daemons_crashed_hook(f: CrashedHook) {
-    let _ = DAEMONS_CRASHED.set(f);
 }
 
 const LS_INITD: u32 = 0x01;
@@ -454,13 +442,13 @@ pub fn rc_service_state(service: &[u8]) -> i32 {
         }
     }
 
+    // A crash report is ignored if errno is EACCES afterwards (e.g. a
+    // pidfile we may not read); see crate::daemon.
     if state & flags::STARTED != 0
-        && let Some(hook) = DAEMONS_CRASHED.get()
+        && crate::daemon::rc_service_daemons_crashed(service)
+        && sys::Errno::last().0 != libc::EACCES
     {
-        let (crashed, errno) = hook(service);
-        if crashed && errno != libc::EACCES {
-            state |= flags::CRASHED;
-        }
+        state |= flags::CRASHED;
     }
 
     if state & flags::STOPPED != 0 {

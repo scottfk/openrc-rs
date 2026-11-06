@@ -9,38 +9,12 @@
 //! - mark_service_*, which call rc_service_mark().
 
 mod common;
-use std::path::PathBuf;
-use std::process::Command;
-
 use common::Case;
 use common::system::{system, system_ns};
 
-/// Compile rc-probe against the reference librc (RUNPATH), once.
-fn probe() -> Option<PathBuf> {
-    let refdir = common::reference_dir()?;
-    if !common::our_libs_built() {
-        return None;
-    }
-    let root = common::repo_root();
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rc-probe");
-    let libdir = refdir.join("librc");
-    let st = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-        .arg("-o")
-        .arg(&out)
-        .arg(root.join("tests/capi/rc-probe.c"))
-        .arg(format!("-I{}", root.join("crates/capi-rc/upstream").display()))
-        .arg(format!("-L{}", libdir.display()))
-        .arg(format!("-Wl,-rpath,{}", libdir.display()))
-        .arg("-lrc")
-        .status()
-        .unwrap();
-    assert!(st.success(), "compiling rc-probe");
-    Some(out)
-}
-
 #[test]
 fn state_functions() {
-    let Some(p) = probe() else { return };
+    let Some(p) = common::rc_probe() else { return };
     let case = |args: &[&str]| {
         let mut c = Case::programs("rc-probe", p.clone(), p.clone(), args).sandbox(system).ns(system_ns());
         c.ourlibs = true;

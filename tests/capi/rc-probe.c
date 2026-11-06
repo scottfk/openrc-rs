@@ -63,6 +63,29 @@ static RC_SERVICE state_of(const char *name)
 	return (RC_SERVICE)atoi(name);
 }
 
+/* "-" is NULL; otherwise a comma-separated list as a NULL-terminated argv. */
+static const char **split_argv(const char *s)
+{
+	static const char *v[16];
+	static char buf[1024];
+	int n = 0;
+	char *p, *tok;
+
+	if (!strcmp(s, "-"))
+		return NULL;
+	snprintf(buf, sizeof(buf), "%s", s);
+	p = buf;
+	while ((tok = strsep(&p, ",")) && n < 15)
+		v[n++] = tok;
+	v[n] = NULL;
+	return v;
+}
+
+static const char *nul(const char *s)
+{
+	return strcmp(s, "-") ? s : NULL;
+}
+
 /* Run one command at argv[0]; returns how many args it used. */
 static int run(int argc, char **argv)
 {
@@ -145,6 +168,34 @@ static int run(int argc, char **argv)
 	} else if (!strcmp(c, "starting")) {
 		printf("starting: %d stopping: %d\n", rc_runlevel_starting(), rc_runlevel_stopping());
 		return 1;
+	} else if (!strcmp(c, "daemon_set")) {
+		/* daemon_set SVC EXEC ARGV PIDFILE STARTED */
+		B("daemon_set", rc_service_daemon_set(a, nul(b), split_argv(argv[3]), nul(argv[4]), atoi(argv[5])));
+		return 6;
+	} else if (!strcmp(c, "started_daemon")) {
+		/* started_daemon SVC EXEC ARGV INDX */
+		B("started_daemon", rc_service_started_daemon(a, nul(b), split_argv(argv[3]), atoi(argv[4])));
+		return 5;
+	} else if (!strcmp(c, "crashed")) {
+		B("crashed", rc_service_daemons_crashed(a));
+		return 2;
+	} else if (!strcmp(c, "find_pids")) {
+		/* find_pids EXEC ARGV UID PID */
+		RC_PIDLIST *pids = rc_find_pids(nul(a), split_argv(b), (uid_t)atoi(argv[3]), (pid_t)atoi(argv[4]));
+		RC_PID *pi, *next;
+		printf("find_pids:");
+		if (!pids) {
+			printf(" (null)\n");
+			return 5;
+		}
+		for (pi = pids->lh_first; pi; pi = next) {
+			next = pi->entries.le_next;
+			printf(" %d", (int)pi->pid);
+			free(pi);
+		}
+		free(pids);
+		printf("\n");
+		return 5;
 	}
 	printf("unknown command %s\n", c);
 	return 1;
