@@ -72,6 +72,11 @@ pub fn write_all(fd: i32, mut data: &[u8]) {
     }
 }
 
+/// `write_all` on a borrowed fd.
+pub fn write_all_fd(fd: BorrowedFd<'_>, data: &[u8]) {
+    write_all(fd.as_raw_fd(), data);
+}
+
 /// Restore the default `SIGPIPE` disposition (Rust's runtime ignores it,
 /// C programs die from it).
 pub fn reset_sigpipe() {
@@ -103,6 +108,8 @@ pub struct Stat {
     pub gid: u32,
     pub nlink: u64,
     pub size: i64,
+    /// `st_mtime` (seconds).
+    pub mtime: i64,
 }
 
 impl Stat {
@@ -115,6 +122,7 @@ impl Stat {
             #[allow(clippy::unnecessary_cast)]
             nlink: st.st_nlink as u64,
             size: st.st_size,
+            mtime: st.st_mtime,
         }
     }
 
@@ -143,6 +151,92 @@ pub fn fstat(fd: BorrowedFd<'_>) -> Result<Stat, Errno> {
     // SAFETY: initialised by the successful fstat.
     let st = unsafe { st.assume_init() };
     Ok(Stat::from_raw(&st))
+}
+
+/// `fstatat(dirfd, path, flags)`; `stat(path)` is `fstatat(None, path, 0)`.
+pub fn fstatat(dirfd: Option<BorrowedFd<'_>>, path: &[u8], flags: i32) -> Result<Stat, Errno> {
+    let path = to_cstring(path);
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: path is a valid C string; fstatat writes a full struct stat on success.
+    cvt(unsafe { libc::fstatat(raw_dirfd(dirfd), path.as_ptr(), st.as_mut_ptr(), flags) })?;
+    // SAFETY: initialised by the successful fstatat.
+    let st = unsafe { st.assume_init() };
+    Ok(Stat::from_raw(&st))
+}
+
+/// `stat(path)`.
+pub fn stat(path: &[u8]) -> Result<Stat, Errno> {
+    fstatat(None, path, 0)
+}
+
+/// `mkdir(path, mode)`.
+pub fn mkdir(path: &[u8], mode: u32) -> Result<(), Errno> {
+    mkdirat(None, path, mode)
+}
+
+/// `unlinkat(dirfd, path, flags)`.
+pub fn unlinkat(dirfd: Option<BorrowedFd<'_>>, path: &[u8], flags: i32) -> Result<(), Errno> {
+    let path = to_cstring(path);
+    // SAFETY: path is a valid C string.
+    cvt(unsafe { libc::unlinkat(raw_dirfd(dirfd), path.as_ptr(), flags) }).map(drop)
+}
+
+/// `futimens(fd, NULL)`: set both times to now.
+pub fn futimens_now(fd: BorrowedFd<'_>) -> Result<(), Errno> {
+    // SAFETY: a null times pointer means "now".
+    cvt(unsafe { libc::futimens(fd.as_raw_fd(), std::ptr::null()) }).map(drop)
+}
+
+/// `settimeofday({sec, 0}, NULL)`.
+pub fn settimeofday(sec: i64) -> Result<(), Errno> {
+    let tv = libc::timeval { tv_sec: sec, tv_usec: 0 };
+    // SAFETY: tv is valid; the timezone pointer may be null.
+    cvt(unsafe { libc::settimeofday(&tv, std::ptr::null()) }).map(drop)
+}
+
+/// `getuid()`.
+pub fn getuid() -> u32 {
+    // SAFETY: cannot fail.
+    unsafe { libc::getuid() }
+}
+
+/// Keep `fd` open for the rest of the process (like librc's cached
+/// directory fds, which are never closed).
+pub fn leak_fd(fd: OwnedFd) -> BorrowedFd<'static> {
+    use std::os::fd::IntoRawFd;
+    let raw = fd.into_raw_fd();
+    // SAFETY: we just gave up ownership and nothing will ever close it, so
+    // it stays valid for 'static.
+    unsafe { BorrowedFd::borrow_raw(raw) }
+}
+
+/// Entry names of the directory open on `fd` (`fdopendir` + `readdir`),
+/// in readdir order, including `.` and `..`.  Consumes the fd.
+pub fn readdir_names(fd: OwnedFd) -> Result<Vec<Vec<u8>>, Errno> {
+    use std::os::fd::IntoRawFd;
+    let raw = fd.into_raw_fd();
+    // SAFETY: fdopendir takes ownership of raw on success.
+    let dir = unsafe { libc::fdopendir(raw) };
+    if dir.is_null() {
+        let e = Errno::last();
+        // SAFETY: fdopendir failed, so we still own raw.
+        unsafe { libc::close(raw) };
+        return Err(e);
+    }
+    let mut names = Vec::new();
+    loop {
+        // SAFETY: dir is a valid DIR*; readdir returns null at the end.
+        let ent = unsafe { libc::readdir(dir) };
+        if ent.is_null() {
+            break;
+        }
+        // SAFETY: d_name is a NUL-terminated array inside the dirent.
+        let name = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) };
+        names.push(name.to_bytes().to_vec());
+    }
+    // SAFETY: dir is valid and closed exactly once (this closes raw too).
+    unsafe { libc::closedir(dir) };
+    Ok(names)
 }
 
 /// `mkdirat(dirfd, path, mode)`.

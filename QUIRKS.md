@@ -31,6 +31,13 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `-m` uses a signed comparison, so modes starting with a byte below `'0'` take the numeric path. `-m ""` is accepted as "don't check", and `-m " 755"` works. | `shared.rs` (`parse_mode`) |
 | low | The umask isn't restored when `mkdirat`/`mkfifoat` fails. This is harmless, because later creates set it to 0 again. | `applets/checkpath.rs` |
 
+## Small helpers
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `is_older_than SRC TGT...` never checks "older": like `is_newer_than` it calls `rc_newer_than`, and succeeds as soon as any TGT contains something newer than SRC. Upstream's comment calls it "perverted", for compatibility with baselayout. | `applets/newer.rs` |
+| low | `is_newer_than` passes on equal mtimes, so a file is "newer than" itself. Only whole seconds are compared. | `rc/mtime.rs` |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |
@@ -49,6 +56,10 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   If `vsnprintf` fails, the message becomes `""`.
 - **`eprefix()` copies its string.** C stores the pointer, so a caller that
   later changes the buffer would see the change in C but not here.
+- **`rc_getfile()` on odd files** (used by `service_get_value`): if a file
+  is shorter than `st_size` when read, C loops forever; we return what was
+  read. If reading fails (e.g. the option is a directory), C hands back a
+  freed buffer (undefined behaviour); we report failure.
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with

@@ -11,6 +11,18 @@ pub fn get(name: &str) -> Option<Vec<u8>> {
     std::env::var_os(name).map(OsStringExt::into_vec)
 }
 
+/// `getenv(name)` for an arbitrary byte-string name, exactly as libc does
+/// it (std refuses names containing `=`, glibc happily matches them).
+pub fn get_bytes(name: &[u8]) -> Option<Vec<u8>> {
+    let name = crate::bytes::to_cstring(name);
+    // SAFETY: name is a valid C string; the result is copied out at once
+    // (single-threaded, nothing modifies the environment meanwhile).
+    unsafe {
+        let p = libc::getenv(name.as_ptr());
+        (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_bytes().to_vec())
+    }
+}
+
 /// `setenv(name, value, 1)`.
 pub fn set(name: &str, value: &[u8]) {
     // SAFETY: OpenRC programs are single-threaded, as are the C programs this

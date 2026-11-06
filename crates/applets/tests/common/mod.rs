@@ -39,12 +39,19 @@ pub fn reference_dir() -> Option<PathBuf> {
     None
 }
 
-/// Where the reference installs-from-build an applet.
+/// Where the reference build puts an applet: `src/<dir>/<applet>`, where
+/// multi-name programs share their source directory's name.
 fn reference_bin(refdir: &Path, applet: &str) -> PathBuf {
-    match applet {
-        "checkpath" => refdir.join("checkpath/checkpath"),
-        _ => refdir.join("einfo").join(applet),
-    }
+    const SHARED: &[(&str, &[&str])] = &[
+        ("value", &["service_get_value", "service_set_value", "service_export", "get_options", "save_options"]),
+        ("mountinfo", &["do_unmount"]),
+    ];
+    let dir = SHARED
+        .iter()
+        .find(|(_, names)| names.contains(&applet))
+        .map(|(d, _)| *d)
+        .unwrap_or_else(|| if refdir.join(applet).join(applet).exists() { applet } else { "einfo" });
+    refdir.join(dir).join(applet)
 }
 
 /// One differential test case.

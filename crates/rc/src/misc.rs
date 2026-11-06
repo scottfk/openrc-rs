@@ -7,6 +7,22 @@ pub fn rc_yesno(value: Option<&[u8]>) -> bool {
     ["yes", "y", "true", "1"].iter().any(|w| v.eq_ignore_ascii_case(w.as_bytes()))
 }
 
+/// `rc_getfile()`: a whole file, read as `st_size` bytes.
+///
+/// Deviations from C, both in cases where C misbehaves: if the file is
+/// shorter than `st_size` when read, C loops forever, we return what was
+/// read; if reading fails (e.g. a directory), C hands its caller a freed
+/// buffer, we return `None`.
+pub fn rc_getfile(path: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let p = openrc_compat::bytes::as_path(path);
+    let mut f = std::fs::File::open(p).ok()?;
+    let size = f.metadata().ok()?.len();
+    let mut buf = Vec::with_capacity(size as usize);
+    f.by_ref().take(size).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
 /// `rc_proc_getent()`: the value of `ent` on the kernel command line.
 /// `ent` alone yields an empty value; the last occurrence wins.
 pub fn rc_proc_getent(ent: &str) -> Option<Vec<u8>> {
