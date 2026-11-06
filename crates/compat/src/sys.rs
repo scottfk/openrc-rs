@@ -663,3 +663,100 @@ pub fn syslog(priority: i32, msg: &[u8]) {
     // SAFETY: well-formed format and argument.
     unsafe { libc::syslog(priority, c"%s".as_ptr(), msg.as_ptr()) }
 }
+
+/// `*at()` calls on a raw directory fd, exactly as C makes them: -1 (or
+/// any bad fd) fails with EBADF, `libc::AT_FDCWD` means the cwd.  For
+/// ports of code that passes unchecked `rc_dirfd()` results along.
+pub mod at {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    use super::{Errno, Stat, cvt, libc, to_cstring};
+
+    pub fn faccessat(dirfd: i32, path: &[u8], mode: i32) -> Result<(), Errno> {
+        let p = to_cstring(path);
+        // SAFETY: valid C string; any int is acceptable as dirfd.
+        cvt(unsafe { libc::faccessat(dirfd, p.as_ptr(), mode, 0) }).map(drop)
+    }
+
+    pub fn fstatat(dirfd: i32, path: &[u8], flags: i32) -> Result<Stat, Errno> {
+        let p = to_cstring(path);
+        let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: valid C string; fstatat writes a full struct stat on success.
+        cvt(unsafe { libc::fstatat(dirfd, p.as_ptr(), st.as_mut_ptr(), flags) })?;
+        // SAFETY: initialised by the successful fstatat.
+        Ok(Stat::from_raw(&unsafe { st.assume_init() }))
+    }
+
+    pub fn unlinkat(dirfd: i32, path: &[u8], flags: i32) -> Result<(), Errno> {
+        let p = to_cstring(path);
+        // SAFETY: valid C string.
+        cvt(unsafe { libc::unlinkat(dirfd, p.as_ptr(), flags) }).map(drop)
+    }
+
+    pub fn symlinkat(target: &[u8], dirfd: i32, path: &[u8]) -> Result<(), Errno> {
+        let (t, p) = (to_cstring(target), to_cstring(path));
+        // SAFETY: valid C strings.
+        cvt(unsafe { libc::symlinkat(t.as_ptr(), dirfd, p.as_ptr()) }).map(drop)
+    }
+
+    pub fn mkdirat(dirfd: i32, path: &[u8], mode: u32) -> Result<(), Errno> {
+        let p = to_cstring(path);
+        // SAFETY: valid C string.
+        cvt(unsafe { libc::mkdirat(dirfd, p.as_ptr(), mode) }).map(drop)
+    }
+
+    pub fn openat(dirfd: i32, path: &[u8], flags: i32, mode: u32) -> Result<OwnedFd, Errno> {
+        let p = to_cstring(path);
+        // SAFETY: valid C string.
+        let fd = cvt(unsafe { libc::openat(dirfd, p.as_ptr(), flags, mode) })?;
+        // SAFETY: openat just returned this fd.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// `readlinkat()`, growing the buffer until the target fits (librc's
+    /// `safe_readlink`).
+    pub fn readlinkat(dirfd: i32, path: &[u8], mut bufsiz: usize) -> Result<Vec<u8>, Errno> {
+        let p = to_cstring(path);
+        loop {
+            let mut buf = vec![0u8; bufsiz];
+            // SAFETY: buf is valid for bufsiz bytes.
+            let n = unsafe { libc::readlinkat(dirfd, p.as_ptr(), buf.as_mut_ptr().cast(), bufsiz) };
+            if n < 0 {
+                return Err(Errno::last());
+            }
+            if (n as usize) < bufsiz {
+                buf.truncate(n as usize);
+                return Ok(buf);
+            }
+            bufsiz += libc::PATH_MAX as usize;
+        }
+    }
+
+    /// `dup(dirfd)` + `fdopendir` + `readdir`: entry names in readdir
+    /// order, including `.` and `..` (librc's `do_dopendir`).
+    pub fn readdir_dup(dirfd: i32) -> Result<Vec<Vec<u8>>, Errno> {
+        // SAFETY: dup on any int is safe; failure is reported.
+        let fd = cvt(unsafe { libc::dup(dirfd) })?;
+        // SAFETY: we own the new fd.
+        super::readdir_names(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// `do_opendirat(dirfd, path)` + `readdir`.
+    pub fn readdir_at(dirfd: i32, path: &[u8]) -> Result<Vec<Vec<u8>>, Errno> {
+        super::readdir_names(openat(dirfd, path, libc::O_RDONLY | libc::O_DIRECTORY, 0)?)
+    }
+}
+
+/// Set `errno` (for C ABI functions whose callers inspect it).
+pub fn set_errno(e: i32) {
+    // SAFETY: errno is thread-local and always writable.
+    unsafe { *libc::__errno_location() = e }
+}
+
+/// `symlink(target, path)` and `unlink(path)` relative to the cwd.
+pub fn symlink(target: &[u8], path: &[u8]) -> Result<(), Errno> {
+    at::symlinkat(target, libc::AT_FDCWD, path)
+}
+pub fn unlink(path: &[u8]) -> Result<(), Errno> {
+    at::unlinkat(libc::AT_FDCWD, path, 0)
+}

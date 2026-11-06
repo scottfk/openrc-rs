@@ -383,3 +383,215 @@ pub unsafe extern "C" fn rc_service_getenv(
     }
     v.len() as isize
 }
+
+// --- librc.c: runlevels and service state -----------------------------------
+
+use rc::state;
+
+unsafe extern "C" {
+    /// Still C (librc-daemon.c) until Phase 2 step 3.
+    #[link_name = "rc_service_daemons_crashed"]
+    fn c_rc_service_daemons_crashed(service: *const c_char) -> bool;
+}
+
+fn daemons_crashed_via_c(service: &[u8]) -> (bool, i32) {
+    let s = to_cstring(service);
+    set_errno(0);
+    // SAFETY: valid C string; the C function only reads it.
+    let crashed = unsafe { c_rc_service_daemons_crashed(s.as_ptr()) };
+    // SAFETY: errno is thread-local.
+    (crashed, unsafe { *libc::__errno_location() })
+}
+
+/// Map an `Err(errno)` result to C's `false` + errno.
+fn errno_bool(r: Result<(), i32>) -> bool {
+    match r {
+        Ok(()) => true,
+        Err(e) => {
+            set_errno(e);
+            false
+        }
+    }
+}
+
+fn opt_malloc(v: Option<Vec<u8>>) -> *mut c_char {
+    v.map_or(std::ptr::null_mut(), |v| malloc_bytes(&v))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_runlevel_starting() -> bool {
+    state::rc_runlevel_starting()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_runlevel_stopping() -> bool {
+    state::rc_runlevel_stopping()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_runlevel_list() -> *mut c_void {
+    stringlist(&state::rc_runlevel_list())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_runlevel_get() -> *mut c_char {
+    opt_malloc(state::rc_runlevel_get())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_runlevel_set(runlevel: *const c_char) -> bool {
+    // SAFETY: C string from the caller.
+    unsafe { arg(runlevel) }.is_some_and(state::rc_runlevel_set)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_runlevel_exists(runlevel: *const c_char) -> bool {
+    // SAFETY: C string from the caller.
+    unsafe { arg(runlevel) }.is_some_and(state::rc_runlevel_exists)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_runlevel_stack(dst: *const c_char, src: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(dst), arg(src)) } {
+        (Some(d), Some(s)) => state::rc_runlevel_stack(d, s),
+        _ => false,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_runlevel_unstack(dst: *const c_char, src: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(dst), arg(src)) } {
+        (Some(d), Some(s)) => state::rc_runlevel_unstack(d, s),
+        _ => false,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_runlevel_stacks(runlevel: *const c_char) -> *mut c_void {
+    // SAFETY: C string from the caller.
+    stringlist(&unsafe { arg(runlevel) }.map(state::rc_runlevel_stacks).unwrap_or_default())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_resolve(service: *const c_char) -> *mut c_char {
+    // SAFETY: C string from the caller.
+    opt_malloc(unsafe { arg(service) }.and_then(state::rc_service_resolve))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_exists(service: *const c_char) -> bool {
+    // SAFETY: C string from the caller.
+    errno_bool(unsafe { arg(service) }.map_or(Err(libc::EINVAL), state::rc_service_exists))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_extra_commands(service: *const c_char) -> *mut c_void {
+    // SAFETY: C string from the caller.
+    match unsafe { arg(service) }.and_then(state::rc_service_extra_commands) {
+        Some(l) => stringlist(&l),
+        None => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_description(service: *const c_char, option: *const c_char) -> *mut c_char {
+    // SAFETY: C strings from the caller.
+    let (s, o) = unsafe { (arg(service), arg(option)) };
+    opt_malloc(s.and_then(|s| state::rc_service_description(s, o)))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_in_runlevel(service: *const c_char, runlevel: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(service), arg(runlevel)) } {
+        (Some(s), Some(r)) => state::rc_service_in_runlevel(s, r),
+        _ => false,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_mark(service: *const c_char, st: c_int) -> bool {
+    state::set_daemons_crashed_hook(daemons_crashed_via_c);
+    // SAFETY: C string from the caller.
+    unsafe { arg(service) }.is_some_and(|s| state::rc_service_mark(s, st))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_state(service: *const c_char) -> c_int {
+    state::set_daemons_crashed_hook(daemons_crashed_via_c);
+    // SAFETY: C string from the caller.
+    unsafe { arg(service) }.map_or(state::flags::STOPPED, state::rc_service_state)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_schedule_start(service: *const c_char, to_start: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(service), arg(to_start)) } {
+        (Some(s), Some(t)) => state::rc_service_schedule_start(s, t),
+        _ => false,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_schedule_clear(service: *const c_char) -> bool {
+    // SAFETY: C string from the caller.
+    unsafe { arg(service) }.is_some_and(state::rc_service_schedule_clear)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_services_in_runlevel(runlevel: *const c_char) -> *mut c_void {
+    // SAFETY: C string (or NULL: every script) from the caller.
+    stringlist(&state::rc_services_in_runlevel(unsafe { arg(runlevel) }))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_services_in_runlevel_stacked(runlevel: *const c_char) -> *mut c_void {
+    // SAFETY: C string (or NULL) from the caller.
+    stringlist(&state::rc_services_in_runlevel_stacked(unsafe { arg(runlevel) }))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_services_in_state(st: c_int) -> *mut c_void {
+    stringlist(&state::rc_services_in_state(st))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_add(runlevel: *const c_char, service: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(runlevel), arg(service)) } {
+        (Some(r), Some(s)) => errno_bool(state::rc_service_add(r, s)),
+        _ => errno_bool(Err(libc::ENOENT)),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_delete(runlevel: *const c_char, service: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(runlevel), arg(service)) } {
+        (Some(r), Some(s)) => state::rc_service_delete(r, s),
+        _ => false,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_services_scheduled_by(service: *const c_char) -> *mut c_void {
+    // SAFETY: C string from the caller.
+    stringlist(&unsafe { arg(service) }.map(state::rc_services_scheduled_by).unwrap_or_default())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_services_scheduled(service: *const c_char) -> *mut c_void {
+    // SAFETY: C string from the caller.
+    stringlist(&unsafe { arg(service) }.map(state::rc_services_scheduled).unwrap_or_default())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_service_putenv(service: *const c_char, env: *const c_char) -> bool {
+    // SAFETY: C strings from the caller.
+    match unsafe { (arg(service), arg(env)) } {
+        (Some(s), Some(e)) => errno_bool(state::rc_service_putenv(s, e)),
+        _ => false,
+    }
+}

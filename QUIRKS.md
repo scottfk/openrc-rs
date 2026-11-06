@@ -56,6 +56,18 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | The fstab lookup compares /proc/mounts' still-escaped mount point (`\040`) with fstab's decoded one, so mount points containing spaces never match fstab. | `applets/mountinfo.rs` |
 | low | `do_unmount`'s retry sleep can't be cut short by a child exiting. `tm_sleep` checks `clock_nanosleep` for -1, but it returns the error number, so EINTR always resumes the sleep. The sleep is capped at 500ms. | `compat/sys.rs` (`tm_sleep`) |
 
+## librc: runlevels and service state
+
+| Severity | Quirk | Where |
+|---|---|---|
+| **high** | `rm_dir()` stats entries following symlinks. A symlink to a directory is recursed into and the *target's* contents are deleted. It's used when a service stops, to clear `options/<svc>` and `daemons/<svc>`, so a symlink planted there makes root empty its target. | `rc/state.rs` (`rm_dir`) |
+| medium | `rc_service_mark(STOPPED)` never clears saved environment. It `unlink()`s `environ/<svc>`, which is a directory, so the call always fails. | `rc/state.rs` |
+| medium | `rc_service_state()` sets SCHEDULED when `scheduled/<service>` exists, meaning the service has scheduled *others*, not that it is scheduled itself. | `rc/state.rs` |
+| low | `rc_service_schedule_clear()` returns its result inverted: false when it removed a schedule, true when there was none (ENOENT). | `rc/state.rs` |
+| low | `rc_services_in_state(SCHEDULED)` walks `.` and `..` of `scheduled/`, so it also lists the scheduling services' names and the svcdir's own entries. `rc_services_scheduled_by()` likewise can return `.`. | `rc/state.rs` |
+| low | `rc_services_in_runlevel_stacked()` lists the runlevel's own services twice, because `rc_runlevel_stacks()` includes the runlevel itself. | `rc/state.rs` |
+| low | `rc_service_mark()` to STARTED or STOPPED also unlinks `scheduled/../<svc>`, i.e. `$svcdir/<svc>`, because it walks `..` too. | `rc/state.rs` |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |
@@ -87,6 +99,9 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   `rc_getfile()` when a read fails, and `rc_service_getenv()` when the
   value can't be opened after the buffer was resized (there C leaves the
   old pointer).
+- **`rc_service_add()` for a service that can't be resolved**, in a
+  runlevel other than `boot`: C dereferences NULL and crashes. We fail with
+  ENOENT. C's own callers check `rc_service_exists()` first.
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with
