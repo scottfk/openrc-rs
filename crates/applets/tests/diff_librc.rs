@@ -242,7 +242,13 @@ fn user_mode() {
         u("rc-update", &["-U", "add", "usvc", "default"]),
         u("rc-service", &["-U", "-l"]),
         u("rc-service", &["-U", "-r", "usvc"]),
-        u("rc-status", &["-U"]).env("XDG_RUNTIME_DIR", "").env("XDG_CONFIG_HOME", ""),
     ];
+    // Without the XDG variables: the error paths.  (Not XDG_RUNTIME_DIR="":
+    // that makes the svcdir /openrc, which root would really create.)
+    let bare = |args: &[&str]| Case::on_our_libs("rc-status", args).sandbox(user_system).ns(system_ns());
+    let mut cases = cases;
+    cases.push(bare(&["-U"]));
+    cases.push(bare(&["-U"]).env("HOME", "$ROOT/home"));
+    cases.push(bare(&["-U"]).env("XDG_CONFIG_HOME", "$ROOT/xdg"));
     common::check_all("librc-user", &cases);
 }

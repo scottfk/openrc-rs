@@ -395,6 +395,17 @@ fn run(bin: &Path, case: &Case, name: &str, ourlibs: bool) -> Outcome {
     Outcome { stdout, stderr, status: status_string(status), tree, syslog }
 }
 
+/// As root (the VM), the names in `/`, to catch cases that write outside
+/// their sandbox; empty (unchecked) otherwise.
+fn root_entries() -> Vec<std::ffi::OsString> {
+    if !is_root() {
+        return Vec::new();
+    }
+    let mut v: Vec<_> = std::fs::read_dir("/").unwrap().flatten().map(|e| e.file_name()).collect();
+    v.sort();
+    v
+}
+
 /// Our C ABI libraries (`make capi`).
 pub fn our_libdir() -> PathBuf {
     repo_root().join("target/capi")
@@ -484,8 +495,11 @@ pub fn check_all(group: &str, cases: &[Case]) {
             None if case.ourlibs => (reference_bin(&refdir, case.applet), reference_bin(&refdir, case.applet)),
             None => (reference_bin(&refdir, case.applet), PathBuf::from(OURS)),
         };
+        let before = root_entries();
         let want = run(&cbin, case, &name, false);
         let got = run(&rbin, case, &name, case.ourlibs);
+        let after = root_entries();
+        assert_eq!(before, after, "{}: case changed / (tests must stay in their sandbox): {}", group, case.describe());
         if want != got {
             let _ = writeln!(failures, "\n=== {} ===", case.describe());
             if want.stdout != got.stdout {
