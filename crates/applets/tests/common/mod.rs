@@ -52,7 +52,8 @@ fn reference_bin(refdir: &Path, applet: &str) -> PathBuf {
 pub struct Case {
     pub applet: &'static str,
     pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
+    /// Values are bytes so non-UTF-8 environments can be tested.
+    pub env: Vec<(String, Vec<u8>)>,
     /// Run with stdin/stdout/stderr on a pseudo-terminal (output merged).
     pub pty: bool,
     /// Create a sandbox directory, populated by this function; `$ROOT` in
@@ -73,8 +74,11 @@ impl Case {
             bins: None,
         }
     }
-    pub fn env(mut self, k: &str, v: &str) -> Case {
-        self.env.push((k.into(), v.into()));
+    pub fn env(self, k: &str, v: &str) -> Case {
+        self.env_bytes(k, v.as_bytes())
+    }
+    pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
+        self.env.push((k.into(), v.to_vec()));
         self
     }
     pub fn pty(mut self) -> Case {
@@ -92,7 +96,7 @@ impl Case {
         self
     }
     fn describe(&self) -> String {
-        let env: Vec<String> = self.env.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+        let env: Vec<String> = self.env.iter().map(|(k, v)| format!("{k}={:?}", String::from_utf8_lossy(v))).collect();
         format!(
             "{}{} {}{}",
             if env.is_empty() { String::new() } else { env.join(" ") + " " },
@@ -170,7 +174,7 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
     cmd.args(case.args.iter().map(|a| a.replace("$ROOT", &root_s)));
     cmd.env_clear().env("PATH", "/usr/bin:/bin");
     for (k, v) in &case.env {
-        cmd.env(k, v.replace("$ROOT", &root_s));
+        cmd.env(k, osstr_bytes(&replace_bytes(v, b"$ROOT", root_s.as_bytes())));
     }
     cmd.current_dir(root.unwrap_or(Path::new("/")));
     cmd
@@ -269,5 +273,25 @@ pub fn whoami() -> String {
 }
 
 pub fn osstr(s: &str) -> OsString {
-    OsString::from_vec(s.as_bytes().to_vec())
+    osstr_bytes(s.as_bytes())
+}
+
+pub fn osstr_bytes(b: &[u8]) -> OsString {
+    OsString::from_vec(b.to_vec())
+}
+
+/// Replace every `from` in `hay` with `to`.
+fn replace_bytes(hay: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(hay.len());
+    let mut i = 0;
+    while i < hay.len() {
+        if hay[i..].starts_with(from) {
+            out.extend_from_slice(to);
+            i += from.len();
+        } else {
+            out.push(hay[i]);
+            i += 1;
+        }
+    }
+    out
 }

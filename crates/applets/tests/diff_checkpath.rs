@@ -125,6 +125,34 @@ fn filesystem() {
     common::check_all("checkpath-fs", &cases);
 }
 
+/// A config directory whose name is not valid UTF-8 (Latin-1 "café").
+const NON_UTF8_DIR: &[u8] = b"caf\xe9";
+
+fn non_utf8_rc_conf(r: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = r.join(std::ffi::OsStr::from_bytes(NON_UTF8_DIR));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("rc.conf"), "rc_sys=\"lxc\"\n").unwrap();
+    fs::create_dir(r.join("plain")).unwrap();
+    fs::write(r.join("plain/rc.conf"), "rc_sys=\"docker\"\n").unwrap();
+}
+
+/// `--version` reports rc_sys, read from rc.conf along $RC_PATH: checks
+/// that script-path handling is byte-exact.
+#[test]
+fn rc_path_and_rc_sys() {
+    let p = non_utf8_rc_conf as fn(&Path);
+    let dir = [&b"$ROOT/"[..], NON_UTF8_DIR].concat();
+    let cases = vec![
+        Case::new("checkpath", &["-V"]).sandbox(p).env("RC_PATH", "$ROOT/plain"),
+        Case::new("checkpath", &["-V"]).sandbox(p).env_bytes("RC_PATH", &dir),
+        Case::new("checkpath", &["-V"]).sandbox(p).env_bytes("RC_PATH", &[&dir[..], b":$ROOT/plain"].concat()),
+        Case::new("checkpath", &["-V"]).sandbox(p).env_bytes("RC_PATH", &[&b"$ROOT/plain:"[..], &dir].concat()),
+        Case::new("checkpath", &["-V"]).sandbox(p).env("RC_PATH", "$ROOT/missing::"),
+    ];
+    common::check_all("checkpath-rc-path", &cases);
+}
+
 #[test]
 fn on_a_terminal() {
     let p = populated as fn(&Path);

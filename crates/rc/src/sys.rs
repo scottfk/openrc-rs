@@ -59,22 +59,22 @@ fn exists(p: &str) -> bool {
 
 /// `get_systype()`: `rc_sys` from rc.conf, uppercased.  QUIRK: like C,
 /// this uppercases the cached rc.conf entry in place.
-fn get_systype() -> Option<String> {
+fn get_systype() -> Option<Vec<u8>> {
     with_rc_conf(|conf| {
         // The entry rc_config_value() would return.
         let i = conf.iter().position(|l| l.starts_with(b"rc_sys="))?;
         let line = &mut conf[i];
         line[b"rc_sys=".len()..].make_ascii_uppercase();
-        Some(String::from_utf8_lossy(&line[b"rc_sys=".len()..]).into_owned())
+        Some(line[b"rc_sys=".len()..].to_vec())
     })
 }
 
 // The checks are kept separate, in upstream's order, even where two give
 // the same answer.
 #[allow(clippy::if_same_then_else)]
-fn detect_container(systype: Option<&str>) -> Option<&'static str> {
+fn detect_container(systype: Option<&[u8]>) -> Option<&'static str> {
     if let Some(s) = systype {
-        if s == RC_SYS_NONE {
+        if s == RC_SYS_NONE.as_bytes() {
             return None;
         }
         for known in [
@@ -88,7 +88,7 @@ fn detect_container(systype: Option<&str>) -> Option<&'static str> {
             RC_SYS_PODMAN,
             RC_SYS_WSL,
         ] {
-            if s == known {
+            if s == known.as_bytes() {
                 return Some(known);
             }
         }
@@ -126,15 +126,15 @@ fn detect_container(systype: Option<&str>) -> Option<&'static str> {
     }
 }
 
-fn detect_vm(systype: Option<&str>) -> Option<&'static str> {
+fn detect_vm(systype: Option<&[u8]>) -> Option<&'static str> {
     if let Some(s) = systype {
-        if s == RC_SYS_NONE {
+        if s == RC_SYS_NONE.as_bytes() {
             return None;
         }
-        if s == RC_SYS_XEN0 {
+        if s == RC_SYS_XEN0.as_bytes() {
             return Some(RC_SYS_XEN0);
         }
-        if s == RC_SYS_XENU {
+        if s == RC_SYS_XENU.as_bytes() {
             return Some(RC_SYS_XENU);
         }
     }

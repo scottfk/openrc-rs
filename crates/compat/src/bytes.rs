@@ -96,6 +96,11 @@ pub fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// View a byte string as a filesystem path (no conversion, no loss).
+pub fn as_path(b: &[u8]) -> &std::path::Path {
+    std::path::Path::new(OsStr::from_bytes(b))
+}
+
 /// Build a `CString` for a syscall; C strings stop at the first NUL anyway.
 pub fn to_cstring(s: &[u8]) -> CString {
     CString::new(c_str_prefix(s)).expect("NUL already stripped")

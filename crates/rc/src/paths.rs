@@ -18,13 +18,13 @@ pub const LOCAL_PREFIX: &str = or(option_env!("OPENRC_LOCAL_PREFIX"), "/usr/loca
 pub const SVCDIR: &str = "/run/openrc";
 
 /// `RC_CONF_OLD`: `$SYSCONFDIR/conf.d/rc`.
-pub fn rc_conf_old() -> String {
-    format!("{SYSCONFDIR}/conf.d/rc")
+pub fn rc_conf_old() -> Vec<u8> {
+    format!("{SYSCONFDIR}/conf.d/rc").into_bytes()
 }
 
 /// The default script search path (`_RC_PATH`), highest priority first.
-pub fn default_rc_path() -> Vec<String> {
-    vec![
+pub fn default_rc_path() -> Vec<Vec<u8>> {
+    [
         format!("{SYSCONFDIR}/rc"),
         SYSCONFDIR.to_string(),
         format!("{LOCAL_PREFIX}/rc"),
@@ -33,4 +33,7 @@ pub fn default_rc_path() -> Vec<String> {
         // Upstream appends this literal, not RC_SVCDIR.
         "/run/openrc".to_string(),
     ]
+    .into_iter()
+    .map(String::into_bytes)
+    .collect()
 }

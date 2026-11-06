@@ -49,8 +49,6 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   If `vsnprintf` fails, the message becomes `""`.
 - **`eprefix()` copies its string.** C stores the pointer, so a caller that
   later changes the buffer would see the change in C but not here.
-- **Non-UTF-8 directory names** in `XDG_*`, `HOME` or `RC_PATH` are converted
-  lossily (librc paths are `String`s for now).
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with

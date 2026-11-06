@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use openrc_compat::bytes::c_str_prefix;
+use openrc_compat::bytes::{as_path, c_str_prefix};
 
 use crate::dirs::{rc_is_user, rc_scriptdirs};
 use crate::misc::rc_proc_getent;
@@ -170,22 +170,22 @@ static RC_CONF: Mutex<Option<ConfigList>> = Mutex::new(None);
 fn load_rc_conf() -> ConfigList {
     let mut conf: ConfigList = Vec::new();
     // rc_scriptdirfds() silently skips directories that cannot be opened.
-    let dirs: Vec<String> = rc_scriptdirs().into_iter().filter(|d| Path::new(d).is_dir()).collect();
+    let dirs: Vec<Vec<u8>> = rc_scriptdirs().into_iter().filter(|d| as_path(d).is_dir()).collect();
     // Upstream says "load configs in reverse order, so earlier entries
     // override later ones", but rc.conf files are concatenated and lookup
     // takes the first match.  QUIRK: so for keys set in more than one
     // rc.conf, the *lowest*-priority directory wins (rc.conf.d entries do
     // replace in place).
     for dir in dirs.iter().rev() {
-        let dir = Path::new(dir);
+        let dir = as_path(dir);
         conf.extend(rc_config_load(&dir.join("rc.conf")));
         config_directory(&mut conf, &dir.join("rc.conf.d"));
     }
 
     // Support old configs.
     let old = rc_conf_old();
-    if !rc_is_user() && Path::new(&old).exists() {
-        conf.extend(rc_config_load(Path::new(&old)));
+    if !rc_is_user() && as_path(&old).exists() {
+        conf.extend(rc_config_load(as_path(&old)));
     }
 
     config_kcl(&mut conf);
