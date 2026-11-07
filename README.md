@@ -87,7 +87,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] VM: boot C OpenRC on the all-Rust `librc.so.1`
 3. **Query and admin tools.** One branch per step:
    - [x] `rc-depend`, `mark_service_*`
-   - [ ] `rc-service`, `service`
+   - [x] `rc-service` and the `service_*` helpers
    - [ ] `rc-update`
    - [ ] `rc-status`
 4. **`openrc-run`**

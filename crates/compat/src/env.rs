@@ -35,3 +35,38 @@ pub fn unset(name: &str) {
     // SAFETY: see `set`.
     unsafe { std::env::remove_var(name) }
 }
+
+/// The raw `environ` entries, in order (normally `NAME=value`, but any
+/// bytes a parent passed are kept as they are).
+pub fn environ() -> Vec<Vec<u8>> {
+    unsafe extern "C" {
+        static environ: *const *const libc::c_char;
+    }
+    let mut out = Vec::new();
+    // SAFETY: environ is a NULL-terminated array of C strings; single
+    // threaded, so nothing changes it while we copy.
+    unsafe {
+        let mut p = environ;
+        while !p.is_null() && !(*p).is_null() {
+            out.push(std::ffi::CStr::from_ptr(*p).to_bytes().to_vec());
+            p = p.add(1);
+        }
+    }
+    out
+}
+
+/// `setenv(name, value, 1)` for any byte-string name (glibc rejects an
+/// empty name or one containing `=` with EINVAL; so does this).
+pub fn set_bytes(name: &[u8], value: &[u8]) -> bool {
+    let (n, v) = (crate::bytes::to_cstring(name), crate::bytes::to_cstring(value));
+    // SAFETY: valid C strings; see `set`.
+    unsafe { libc::setenv(n.as_ptr(), v.as_ptr(), 1) == 0 }
+}
+
+/// `unsetenv(name)` for any byte-string name (EINVAL as glibc for an
+/// empty name or one containing `=`).
+pub fn unset_bytes(name: &[u8]) -> bool {
+    let n = crate::bytes::to_cstring(name);
+    // SAFETY: valid C string; see `set`.
+    unsafe { libc::unsetenv(n.as_ptr()) == 0 }
+}

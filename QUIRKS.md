@@ -103,6 +103,14 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A value starting with `$` becomes the *key*: `a=$b` gives `a=a`, and `export a=$b` gives `a=export a`. | `rc/conf.rs` |
 | low | `rc_sys()` uppercases the cached `rc_sys` value in place, so later `rc_conf_value("rc_sys")` calls see it uppercased. | `rc/sys.rs` |
 
+## rc-service, service_*
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `rc-service` drops the caller's `PATH`. `env_filter()` runs first and `PATH` isn't on its allow list, so `env_config()` always starts from the bare system prefix. Its code to keep the caller's extra directories only runs when `rc_env_allow` lists `PATH`. | `applets/shared.rs` (`env_filter`, `env_config`) |
+| low | `env_config()` checks the system prefix textually: a `PATH` that merely *starts with* `/usr/libexec/rc/bin:/bin:/sbin:/usr/bin:/usr/sbin`, such as `...:/usr/sbinX:/z`, is kept unchanged. | `applets/shared.rs` (`env_config`) |
+| low | `rc-service -e`, `-l` and `-r` act as soon as getopt reaches them, so later options are ignored: `rc-service -e nosuch -l` just exits 1. | `applets/rc_service.rs` |
+
 ## rc-depend, mark_service_*
 
 | Severity | Quirk | Where |
@@ -141,6 +149,9 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **`rc_service_add()` for a service that can't be resolved**, in a
   runlevel other than `boot`: C dereferences NULL and crashes. We fail with
   ENOENT. C's own callers check `rc_service_exists()` first.
+- **`service_started_daemon EXEC [INDEX]` with `RC_SVCNAME` unset:** C
+  passes a NULL service to `basename_c()` and crashes; we exit 1 ("not
+  started").
 - **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
   we return NULL. (A NULL *value* inside a list still crashes in
   `strcmp()`, as in C.)

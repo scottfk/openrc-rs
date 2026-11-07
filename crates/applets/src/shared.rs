@@ -1,6 +1,7 @@
 //! Port of upstream's `src/shared/` helpers used by several programs:
 //! the common options and usage text (`_usage.c`), `parse_mode`, and the
-//! `misc.c` helpers `default_runlevel()` and `_rc_deptree_load()`.
+//! `misc.c` helpers `default_runlevel()`, `_rc_deptree_load()`,
+//! `env_filter()` and `env_config()`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -213,6 +214,204 @@ pub fn rc_deptree_load_updating(force: i32, regen: Option<&mut i32>) -> Option<r
         }
     }
     rc::deptree::rc_deptree_load()
+}
+
+/// `lookup_service_state()` (shared/misc.c): the state bit for
+/// `service_started` & co.  There is no `service_scheduled`.
+pub fn lookup_service_state(name: &[u8]) -> i32 {
+    use rc::state::flags as st;
+    match name {
+        b"service_started" => st::STARTED,
+        b"service_stopped" => st::STOPPED,
+        b"service_inactive" => st::INACTIVE,
+        b"service_starting" => st::STARTING,
+        b"service_stopping" => st::STOPPING,
+        b"service_hotplugged" => st::HOTPLUGGED,
+        b"service_wasinactive" => st::WASINACTIVE,
+        b"service_failed" => st::FAILED,
+        b"service_crashed" => st::CRASHED,
+        _ => 0,
+    }
+}
+
+/// `rc_conf_yesno()`: [`rc::misc::rc_yesno_errno`] on an rc.conf setting.
+pub fn rc_conf_yesno(setting: &str) -> (bool, Option<i32>) {
+    rc::misc::rc_yesno_errno(rc::conf::rc_conf_value(setting).as_deref())
+}
+
+/// `env_allowlist` (shared/misc.c).
+const ENV_ALLOWLIST: &[&str] = &[
+    "EERROR_QUIET",
+    "EINFO_QUIET",
+    "IN_BACKGROUND",
+    "IN_DRYRUN",
+    "IN_HOTPLUG",
+    "RC_DEBUG",
+    "RC_NODEPS",
+    "RC_USER_SERVICES",
+    "RC_SVCDIR",
+    "RC_PATH",
+    "LANG",
+    "LC_MESSAGES",
+    "TERM",
+    "EINFO_COLOR",
+    "EINFO_VERBOSE",
+    "HOSTNAME",
+    "CHARSET",
+    "LC_*",
+];
+
+/// `usrenv_allowlist`: also kept in user mode.
+const USRENV_ALLOWLIST: &[&str] =
+    &["USER", "LOGNAME", "HOME", "SHELL", "XDG_*", "DIFFTOOL", "LESS", "PAGER", "EDITOR", "VISUAL"];
+
+fn env_match(pattern: &[u8], name: &[u8]) -> bool {
+    use openrc_compat::sys::{self, libc};
+    sys::fnmatch(pattern, name, libc::FNM_NOESCAPE | libc::FNM_PERIOD)
+}
+
+/// `env_filter()`: drop every environment variable that isn't on the
+/// allow lists or in `rc_env_allow`, then add what's missing from
+/// `profile.env`.  `rc_env_allow="*"` keeps everything (and skips
+/// profile.env).
+pub fn env_filter() {
+    use openrc_compat::bytes::as_path;
+
+    // rc_stringlist_split(value, " "): empty pieces kept; NULL gives none.
+    let env_allow: Vec<Vec<u8>> = rc::conf::rc_conf_value("rc_env_allow")
+        .map(|v| v.split(|&b| b == b' ').map(<[u8]>::to_vec).collect())
+        .unwrap_or_default();
+    if env_allow.iter().any(|a| a == b"*") {
+        return;
+    }
+
+    let mut profile =
+        rc::conf::rc_config_load(as_path(format!("{}/profile.env", rc::dirs::rc_sysconfdir()).as_bytes()));
+    if rc::dirs::rc_is_user() {
+        // xasprintf("%s/profile.env", NULL) would give "(null)/profile.env".
+        let dir = rc::dirs::rc_usrconfdir().unwrap_or_else(|| b"(null)".to_vec());
+        profile.extend(rc::conf::rc_config_load(as_path(&bcat!(dir, "/profile.env"))));
+    }
+
+    // Work from a copy of the names.
+    let names: Vec<Vec<u8>> = env::environ()
+        .into_iter()
+        .map(|e| match e.iter().position(|&b| b == b'=') {
+            Some(i) => e[..i].to_vec(),
+            None => e,
+        })
+        .collect();
+    for name in names {
+        if ENV_ALLOWLIST.iter().any(|p| env_match(p.as_bytes(), &name)) {
+            continue;
+        }
+        if rc::dirs::rc_is_user() && USRENV_ALLOWLIST.iter().any(|p| env_match(p.as_bytes(), &name)) {
+            continue;
+        }
+        if env_allow.iter().any(|p| env_match(p, &name)) {
+            continue;
+        }
+        env::unset_bytes(&name);
+    }
+
+    // Now add anything missing from the profile.
+    for entry in profile {
+        let eq = entry.iter().position(|&b| b == b'=').unwrap_or(entry.len());
+        let (name, value) = (&entry[..eq], entry.get(eq + 1..).unwrap_or_default());
+        if env::get_bytes(name).is_none() {
+            env::set_bytes(name, value);
+        }
+    }
+}
+
+/// `RC_PATH_PREFIX`.
+fn rc_path_prefix() -> Vec<u8> {
+    bcat!(rc::paths::LIBEXECDIR, "/bin:/bin:/sbin:/usr/bin:/usr/sbin")
+}
+
+/// `env_config()`: the environment init scripts expect (`RC_*`, a PATH
+/// starting with the system directories, einfo settings from rc.conf).
+pub fn env_config() {
+    use openrc_compat::sys;
+
+    let prefix = rc_path_prefix();
+    match env::get("PATH") {
+        None => env::set("PATH", &prefix),
+        Some(path) if !path.starts_with(&prefix) => {
+            // Keep only the parts of PATH that aren't already in the prefix.
+            let mut np = prefix.clone();
+            for token in path.split(|&b| b == b':') {
+                if !prefix.split(|&b| b == b':').any(|t| t == token) {
+                    np.push(b':');
+                    np.extend_from_slice(token);
+                }
+            }
+            env::unset("PATH");
+            env::set("PATH", &np);
+        }
+        Some(_) => {}
+    }
+
+    if !rc::dirs::rc_is_user() {
+        env::set("RC_CACHEDIR", b"/var/cache/rc");
+    } else if let Some(c) = env::get("XDG_CACHE_HOME") {
+        env::set("RC_CACHEDIR", &bcat!(c, "/rc"));
+    } else if let Some(h) = env::get("HOME") {
+        env::set("RC_CACHEDIR", &bcat!(h, "/.cache/rc"));
+    }
+
+    let svcdir = rc::svcdir::rc_svcdir();
+    let runlevel = default_runlevel();
+    env::set("RC_VERSION", rc::VERSION.as_bytes());
+    env::set("RC_LIBEXECDIR", rc::paths::LIBEXECDIR.as_bytes());
+    env::set("RC_SVCDIR", &svcdir);
+    env::set("RC_TMPDIR", &bcat!(svcdir, "/tmp"));
+    env::set("RC_BOOTLEVEL", b"boot");
+    env::set("RC_RUNLEVEL", &runlevel);
+    env::set("RC_PATH", &rc::dirs::rc_scriptdirs().join(&b':'));
+
+    // krunlevel is a system-wide override; it never applies to user
+    // sessions.  (A fixed path: RC_SVCDIR "/krunlevel".)
+    let krunlevel = if rc::dirs::rc_is_user() {
+        None
+    } else {
+        std::fs::File::open(format!("{}/krunlevel", rc::paths::SVCDIR)).ok()
+    };
+    let deflevel = krunlevel.and_then(|f| {
+        use std::io::BufRead;
+        // xgetline(): one line without its '\n'; nothing on EOF or error.
+        let mut line = Vec::new();
+        match std::io::BufReader::new(f).read_until(b'\n', &mut line) {
+            Ok(n) if n > 0 => {
+                if line.last() == Some(&b'\n') {
+                    line.pop();
+                }
+                Some(openrc_compat::bytes::c_str_prefix(&line).to_vec())
+            }
+            _ => None,
+        }
+    });
+    env::set("RC_DEFAULTLEVEL", &deflevel.unwrap_or_else(default_runlevel));
+
+    if let Some(sys) = rc::rc_sys() {
+        env::set("RC_SYS", sys.as_bytes());
+    }
+    if let Some(u) = sys::uname_sysname() {
+        env::set("RC_UNAME", &u);
+    }
+
+    // Be quiet or verbose as necessary.
+    if rc_conf_yesno("rc_quiet").0 {
+        env::set("EINFO_QUIET", b"YES");
+    }
+    if rc_conf_yesno("rc_verbose").0 {
+        env::set("EINFO_VERBOSE", b"YES");
+    }
+    // `!yesno && errno == 0`: only an explicit "no" turns colour off.
+    let (color, err) = rc_conf_yesno("rc_color");
+    if (!color && err.is_none()) || rc_conf_yesno("rc_nocolor").0 {
+        env::set("EINFO_COLOR", b"NO");
+    }
 }
 
 /// `parse_mode()`: only numeric (octal) modes are supported.

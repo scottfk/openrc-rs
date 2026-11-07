@@ -4,6 +4,7 @@
 # 20261106 - Add mountinfo/fstabinfo/seedrng/netmount/value-applet commands - Claude - scottfk
 # 20261106 - Add deptree commands: regenerate and print the cache, rc-depend queries - Claude - scottfk
 # 20261107 - Add rc-depend option cases and mark_service_* round trips - Claude - scottfk
+# 20261107 - Add rc-service options and service_* state queries - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -57,3 +58,12 @@ run /usr/libexec/rc/bin/rc-depend nosuch
 run '/usr/libexec/rc/sbin/mark_service_inactive local; rc-status default; /usr/libexec/rc/sbin/mark_service_started local; rc-status default'
 run 'RC_SVCNAME=local /usr/libexec/rc/sbin/mark_service_failed; rc-status --crashed; rc-service local zap; rc-service local start'
 run /usr/libexec/rc/sbin/mark_service_started
+run rc-service -l
+run 'rc-service -e sshd; echo e=$?; rc-service -e nosuch; echo e=$?'
+run 'rc-service -r sshd; rc-service -r net.lo; rc-service -r nosuch; echo r=$?'
+run 'rc-service -s sshd status; rc-service -S sshd status; echo s=$?; rc-service -N local status; rc-service -c sshd status; echo c=$?'
+run 'rc-service -i nosuch start; echo i=$?'
+run 'rc-service -Z local restart'
+run 'FOO=bar LC_ALL=C rc-service -d local status'
+run 'for s in started stopped starting inactive crashed; do /usr/libexec/rc/bin/service_$s sshd; echo "$s=$?"; done'
+run 'RC_SVCNAME=sshd /usr/libexec/rc/bin/service_started; echo $?; /usr/libexec/rc/bin/service_started_daemon sshd /usr/sbin/sshd; echo d=$?; /usr/libexec/rc/bin/service_started_daemon sshd /usr/sbin/sshd 1; echo d1=$?'

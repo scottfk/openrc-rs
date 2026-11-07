@@ -8,7 +8,9 @@ pub mod mark_service;
 pub mod mountinfo;
 pub mod newer;
 pub mod rc_depend;
+pub mod rc_service;
 pub mod seedrng;
+pub mod service;
 pub mod shell_var;
 pub mod swclock;
 pub mod value;
@@ -24,7 +26,6 @@ pub enum InstallDir {
     #[allow(dead_code)]
     Bin,
     /// `$sbindir`.
-    #[allow(dead_code)]
     Sbin,
 }
 
@@ -51,6 +52,10 @@ pub struct Applet {
 
 const fn rc_bin(name: &'static str, main: Main) -> Applet {
     Applet { name, dir: InstallDir::RcBin, main }
+}
+
+const fn sbin(name: &'static str, main: Main) -> Applet {
+    Applet { name, dir: InstallDir::Sbin, main }
 }
 
 const fn rc_sbin(name: &'static str, main: Main) -> Applet {
@@ -90,6 +95,16 @@ pub const APPLETS: &[Applet] = &[
     rc_bin("is_older_than", newer::is_older_than),
     rc_bin("rc-depend", rc_depend::main),
     rc_bin("shell_var", shell_var::main),
+    // src/service/meson.build service_execs:
+    rc_bin("service_starting", service::main),
+    rc_bin("service_started", service::main),
+    rc_bin("service_stopping", service::main),
+    rc_bin("service_stopped", service::main),
+    rc_bin("service_inactive", service::main),
+    rc_bin("service_wasinactive", service::main),
+    rc_bin("service_hotplugged", service::main),
+    rc_bin("service_started_daemon", service::main),
+    rc_bin("service_crashed", service::main),
     // src/value/meson.build value_execs:
     rc_bin("service_get_value", value::main),
     rc_bin("service_set_value", value::main),
@@ -107,6 +122,7 @@ pub const APPLETS: &[Applet] = &[
     rc_sbin("mark_service_failed", mark_service::main),
     rc_sbin("mark_service_crashed", mark_service::main),
     rc_sbin("seedrng", seedrng::main),
+    sbin("rc-service", rc_service::main),
     rc_sbin("swclock", swclock::main),
 ];
 
