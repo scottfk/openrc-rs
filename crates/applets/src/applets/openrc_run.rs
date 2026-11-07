@@ -3,9 +3,8 @@
 //! and runs `openrc-run.sh` for each command, handling dependencies,
 //! locking and state for start and stop.
 //!
-//! Phase 4 step 1: everything except `start`, `stop`, `restart` and
-//! `condrestart` (and the plugin hooks they run), which follow in the next
-//! steps.  Until then the applet isn't installed.
+//! Phase 4 step 2: everything except `stop`, `restart` and `condrestart`,
+//! which follow in the next step.  Until then the applet isn't installed.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
@@ -13,14 +12,20 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
 use openrc_compat::getopt::{Getopt, HasArg, LongOpt};
 use openrc_compat::stdio::{self, Stream};
 use openrc_compat::{bcat, env, exec, num, sys};
-use openrc_einfo::{EColor, ecolor, eerror, eerrorx, einfo, einfov, eprefix, ewarnv};
+use openrc_einfo::{EColor, ecolor, eerror, eerrorn, eerrorx, einfo, einfon, einfov, eprefix, ewarn, ewarnv, ewarnx};
 use rc::deptree::{self, DepTree, options};
 use rc::state::{self, flags};
 use rc::svcdir::{RcDir, rc_dirfd_raw, rc_svcdir};
 
+use crate::plugin::{self, hook, rc_plugin_run};
 use crate::shared::{
-    Usage, default_runlevel, env_config, env_filter, getoptstring_common, rc_conf_yesno, rc_deptree_load_updating,
+    Usage, default_runlevel, env_config, env_filter, exec_service, getoptstring_common, rc_conf_yesno,
+    rc_deptree_load_updating, svc_lock, svc_unlock,
 };
+
+/// Seconds until we time out waiting for a service, and how often we warn.
+const WAIT_TIMEOUT: i32 = 60;
+const WARN_TIMEOUT: i32 = 10;
 
 const GETOPTSTRING: &str = concat!("dDsSvl:Z", getoptstring_common!());
 const LONGOPTS: &[LongOpt] = &[
@@ -107,18 +112,11 @@ fn unhotplug(applet: &[u8]) {
     }
 }
 
-/// `svc_unlock()` (shared/misc.c): drop the exclusive lock.
-fn svc_unlock(applet: &[u8], fd: i32) -> i32 {
-    let _ = sys::at::unlinkat(rc_dirfd_raw(RcDir::Exclusive), applet, 0);
-    sys::close_raw(fd);
-    -1
-}
-
 /// `restore_state()`: if we hold the lock and left the service half-way
 /// (starting or stopping), put it back.
 fn restore_state() {
     let fd = EXCLUSIVE_FD.load(SeqCst);
-    if fd == -1 {
+    if plugin::rc_in_plugin() || fd == -1 {
         return;
     }
     let applet = applet();
@@ -151,20 +149,22 @@ fn start_services(list: &[Vec<u8>]) {
         }
         if st & (flags::INACTIVE | flags::WASINACTIVE) != 0 {
             state::rc_service_schedule_start(&applet, svc);
-            openrc_einfo::ewarn(Some(&bcat!("WARNING: ", svc, " will start when ", applet, " has started")));
+            ewarn(Some(&bcat!("WARNING: ", svc, " will start when ", applet, " has started")));
         } else {
-            // TODO(phase4-step2): service_start() (exec_service).
-            let _ = svc;
+            exec_service(svc, b"start");
         }
     }
 }
 
 extern "C" fn cleanup() {
     restore_state();
-    let restart = RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()).take();
-    if let Some(list) = restart {
-        start_services(&list);
+    if !plugin::rc_in_plugin() {
+        let restart = RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(list) = restart {
+            start_services(&list);
+        }
     }
+    plugin::rc_plugin_unload();
     stdio::flush();
 }
 
@@ -179,6 +179,26 @@ struct Run {
     /// eprefix() string with rc_parallel.
     prefix: Option<Vec<u8>>,
     deptree: Option<DepTree>,
+    deps: bool,
+    dry_run: bool,
+    in_background: bool,
+    /// The IN_BACKGROUND we were given, passed on to our own script only.
+    ibsave: Option<Vec<u8>>,
+    need_services: Vec<Vec<u8>>,
+    want_services: Vec<Vec<u8>>,
+    use_services: Vec<Vec<u8>>,
+}
+
+fn strings(list: &[&str]) -> Vec<Vec<u8>> {
+    list.iter().map(|s| s.as_bytes().to_vec()).collect()
+}
+
+/// `write(1, buf, len)`, retried when a signal interrupts it.
+///
+/// Deviation: C doesn't retry, so a SIGCHLD (installed without SA_RESTART)
+/// landing in a write to the terminal can drop bytes of the script's output.
+fn write_retry(buf: &[u8]) {
+    while sys::write_raw(1, buf) < 0 && sys::Errno::last().0 == sys::libc::EINTR {}
 }
 
 /// `write_prefix()`: copy the child's output to stdout, with our prefix at
@@ -219,16 +239,16 @@ fn write_prefix(prefix: &[u8], buffer: &[u8], prefixed: &mut bool) {
             }
         }
         if !*prefixed {
-            sys::write_raw(1, ec);
-            sys::write_raw(1, openrc_compat::bytes::c_str_prefix(prefix));
-            sys::write_raw(1, ec_normal);
-            sys::write_raw(1, b"|");
+            write_retry(ec);
+            write_retry(openrc_compat::bytes::c_str_prefix(prefix));
+            write_retry(ec_normal);
+            write_retry(b"|");
             *prefixed = true;
         }
         if b == b'\n' {
             *prefixed = false;
         }
-        sys::write_raw(1, &[b]);
+        write_retry(&[b]);
     }
     drop(lock);
 }
@@ -375,6 +395,336 @@ impl Run {
             eerrorx(Some(&bcat!("rc_service_mark: ", e.strerror())));
         }
         unhotplug(&self.applet);
+        0
+    }
+
+    // --- start ----------------------------------------------------------
+
+    /// `rc_deptree_depend(deptree, svc, ty)`, empty without a deptree.
+    fn depend(&self, svc: &[u8], ty: &[u8]) -> Vec<Vec<u8>> {
+        self.deptree.as_ref().and_then(|t| deptree::rc_deptree_depend(t, svc, ty).ok()).unwrap_or_default()
+    }
+
+    fn depends(&self, types: &[&str], options: i32) -> Vec<Vec<u8>> {
+        let tree = self.deptree.as_ref().expect("loaded by svc_start_deps");
+        deptree::rc_deptree_depends(
+            tree,
+            Some(&strings(types)),
+            std::slice::from_ref(&self.applet),
+            Some(&self.runlevel),
+            options,
+        )
+        .0
+    }
+
+    /// The START_OUT hook, then exit(1).
+    fn start_failed(&self) -> ! {
+        rc_plugin_run(hook::SERVICE_START_OUT, &self.applet);
+        stdio::exit(1)
+    }
+
+    /// `svc_getenv()`: take on the variables a started service reexports.
+    fn svc_getenv(&self, svc: &[u8]) {
+        for name in self.depend(svc, b"reexport") {
+            if let Some(v) = rc::service::rc_service_getenv(svc, &name) {
+                env::set_bytes(&name, openrc_compat::bytes::c_str_prefix(&v));
+            }
+        }
+    }
+
+    /// `svc_wait()`: wait (warning every 10 seconds, giving up after 60
+    /// unless the service has the `-timeout` keyword) for `svc` to drop
+    /// its exclusive lock.  False on a timeout or error.
+    fn svc_wait(&self, svc: &[u8]) -> bool {
+        use sys::libc;
+        let base = openrc_compat::bytes::basename_c(svc);
+        let keywords = self.depend(svc, b"keyword");
+        let forever = keywords.iter().any(|k| k == b"-timeout" || k == b"notimeout");
+        let fd = match sys::openat_raw(rc_dirfd_raw(RcDir::Exclusive), base, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+            Ok(fd) => fd,
+            Err(e) => return e.0 == libc::ENOENT,
+        };
+        let mut timeout = WAIT_TIMEOUT;
+        let mut retval = false;
+        TIMEDOUT.store(false, SeqCst);
+        loop {
+            if !forever {
+                sys::alarm(WARN_TIMEOUT as u32);
+            }
+            match sys::flock_raw(fd, libc::LOCK_SH) {
+                Ok(()) => {
+                    retval = true;
+                    break;
+                }
+                Err(e) if e.0 != libc::EINTR => break,
+                Err(_) => {}
+            }
+            if !forever && TIMEDOUT.load(SeqCst) {
+                TIMEDOUT.store(false, SeqCst);
+                timeout -= WARN_TIMEOUT;
+                if timeout > 0 {
+                    openrc_einfo::ewarn(Some(&bcat!(
+                        self.applet,
+                        ": waiting for ",
+                        base,
+                        " (",
+                        timeout.to_string().as_bytes(),
+                        " seconds)"
+                    )));
+                } else {
+                    break;
+                }
+            }
+        }
+        sys::alarm(0);
+        sys::close_raw(fd);
+        retval
+    }
+
+    /// `svc_start_check()`: may we start?  Takes the lock and marks us
+    /// starting, or exits.
+    fn svc_start_check(&self) {
+        let st = state::rc_service_state(&self.applet);
+        let mut ret = 1;
+        'check: {
+            if self.in_background {
+                if st & (flags::INACTIVE | flags::STOPPED) == 0 {
+                    break 'check;
+                }
+                if rc::misc::rc_yesno(env::get("IN_HOTPLUG").as_deref()) {
+                    state::rc_service_mark(&self.applet, flags::HOTPLUGGED);
+                }
+                if self.runlevel == state::RC_LEVEL_SYSINIT {
+                    ewarnx(Some(&bcat!("WARNING: ", self.applet, " will be started in the next runlevel")));
+                }
+            }
+            if st & flags::STARTED != 0 {
+                ewarn(Some(&bcat!("WARNING: ", self.applet, " has already been started")));
+                ret = 0;
+                break 'check;
+            } else if st & flags::INACTIVE != 0 && !self.in_background {
+                ewarnx(Some(&bcat!("WARNING: ", self.applet, " has already started, but is inactive")));
+            }
+
+            if EXCLUSIVE_FD.load(SeqCst) == -1 {
+                let r = svc_lock(&self.applet, !self.deps);
+                EXCLUSIVE_FD.store(*r.as_ref().unwrap_or(&-1), SeqCst);
+                if let Err(errno) = r {
+                    if errno != sys::libc::EWOULDBLOCK {
+                        eerror(Some(&bcat!(self.applet, ": failed to acquire lock: ", sys::strerror(errno))));
+                        break 'check;
+                    }
+                    if st & flags::STOPPING != 0 {
+                        ewarnx(Some(&bcat!("WARNING: ", self.applet, " is stopping")));
+                    } else {
+                        ewarnx(Some(&bcat!("WARNING: ", self.applet, " is already starting")));
+                    }
+                }
+            }
+            sys::set_cloexec(EXCLUSIVE_FD.load(SeqCst));
+
+            state::rc_service_mark(&self.applet, flags::STARTING);
+            rc_plugin_run(hook::SERVICE_START_IN, &self.applet);
+            return;
+        }
+        rc_plugin_run(hook::SERVICE_START_OUT, &self.applet);
+        stdio::exit(ret);
+    }
+
+    /// `svc_start_deps()`: start what we use, wait for what we need, or
+    /// schedule ourselves to start once inactive needs have started.
+    fn svc_start_deps(&mut self) {
+        let mut depoptions = options::TRACE;
+        let (strict, err) = rc_conf_yesno("rc_depend_strict");
+        if strict || err == Some(sys::libc::ENOENT) {
+            depoptions |= options::STRICT;
+        }
+        if self.deptree.is_none() {
+            self.deptree = rc_deptree_load_updating(0, None);
+            if self.deptree.is_none() {
+                eerror(Some(b"failed to load deptree"));
+                self.start_failed();
+            }
+        }
+
+        let broken = self.depends(&["broken"], 0);
+        if !broken.is_empty() {
+            eerrorn(Some(&bcat!("ERROR: ", self.applet, " needs service(s) ")));
+            let mut line = Vec::new();
+            for (i, svc) in broken.iter().enumerate() {
+                if i > 0 {
+                    line.extend_from_slice(b", ");
+                }
+                line.extend_from_slice(openrc_compat::bytes::c_str_prefix(svc));
+            }
+            line.push(b'\n');
+            stdio::err(&line);
+            self.start_failed();
+        }
+
+        self.need_services = self.depends(&["ineed"], depoptions);
+        self.want_services = self.depends(&["ineed", "iwant"], depoptions);
+        self.use_services = self.depends(&["ineed", "iwant", "iuse"], depoptions);
+
+        if !state::rc_runlevel_starting() {
+            for svc in &self.use_services {
+                let st = state::rc_service_state(svc);
+                // Don't stop failed services again.  (QUIRK: inside a
+                // check that the runlevel isn't starting, so dead.)
+                if st & flags::FAILED != 0 && state::rc_runlevel_starting() {
+                    continue;
+                }
+                if st & flags::STOPPED != 0 {
+                    if self.dry_run {
+                        stdio::out(&bcat!(" ", openrc_compat::bytes::c_str_prefix(svc)));
+                        continue;
+                    }
+                    let pid = exec_service(svc, b"start");
+                    if !rc_conf_yesno("rc_parallel").0 {
+                        exec::rc_waitpid(pid);
+                    }
+                }
+            }
+        }
+
+        if self.dry_run {
+            return;
+        }
+
+        // Now wait for them to start.
+        let services = self.depends(&["ineed", "iwant", "iuse", "iafter"], depoptions);
+        // The services we'll be scheduled by.
+        let mut tmplist: Vec<Vec<u8>> = Vec::new();
+        for svc in &services {
+            let mut st = state::rc_service_state(svc);
+            if st & flags::STARTED != 0 {
+                self.svc_getenv(svc);
+                continue;
+            }
+            // Don't wait for services which went inactive but are now
+            // starting, which we are after.
+            if st & flags::STARTING != 0
+                && st & flags::WASINACTIVE != 0
+                && !self.need_services.contains(svc)
+                && !self.want_services.contains(svc)
+                && !self.use_services.contains(svc)
+            {
+                continue;
+            }
+            if !self.svc_wait(svc) {
+                eerror(Some(&bcat!(self.applet, ": timed out waiting for ", svc)));
+            }
+            st = state::rc_service_state(svc);
+            if st & flags::STARTED != 0 {
+                self.svc_getenv(svc);
+                continue;
+            }
+            if self.need_services.contains(svc) {
+                if st & (flags::INACTIVE | flags::WASINACTIVE) != 0 {
+                    tmplist.push(svc.clone());
+                } else if tmplist.is_empty() {
+                    eerror(Some(&bcat!("ERROR: cannot start ", self.applet, " as ", svc, " would not start")));
+                    self.start_failed();
+                }
+            }
+        }
+
+        if !tmplist.is_empty() {
+            // Set the state now, then unlink our exclusive so that our
+            // scheduled list is preserved.
+            state::rc_service_mark(&self.applet, flags::STOPPED);
+            let mut names = Vec::new();
+            for (i, svc) in tmplist.iter().enumerate() {
+                state::rc_service_schedule_start(svc, &self.applet);
+                // QUIRK: service and type swapped, so this finds nothing
+                // and what svc provides never gets the schedule.
+                for provided in self.depend(b"iprovide", svc) {
+                    state::rc_service_schedule_start(&provided, &self.applet);
+                }
+                if i > 0 {
+                    names.extend_from_slice(b", ");
+                }
+                names.extend_from_slice(openrc_compat::bytes::c_str_prefix(svc));
+            }
+            let verb = if tmplist.len() > 1 { "have" } else { "has" };
+            ewarnx(Some(&bcat!("WARNING: ", self.applet, " will start when ", names, " ", verb, " started")));
+        }
+    }
+
+    /// `set_reexports()`: `RC_REEXPORT`, the variables we reexport.
+    fn set_reexports(&self) {
+        let mut v = Vec::new();
+        for name in self.depend(&self.applet, b"reexport") {
+            v.extend_from_slice(&bcat!(openrc_compat::bytes::c_str_prefix(&name), " "));
+        }
+        env::set_bytes(b"RC_REEXPORT", &v);
+    }
+
+    /// Start the services scheduled to start after `svc` that are stopped.
+    fn start_scheduled(svc: &[u8]) {
+        for s in state::rc_services_scheduled(svc) {
+            if state::rc_service_state(&s) & flags::STOPPED != 0 {
+                exec_service(&s, b"start");
+            }
+        }
+    }
+
+    /// `svc_start_real()`: run the script's start, mark us started, then
+    /// start whatever was waiting for us.
+    fn svc_start_real(&self) {
+        self.set_reexports();
+        if let Some(ib) = &self.ibsave {
+            env::set_bytes(b"IN_BACKGROUND", ib);
+        }
+        rc_plugin_run(hook::SERVICE_START_NOW, &self.applet);
+        SKIP_MARK.store(false, SeqCst);
+        let started = self.svc_exec(b"start") == 0;
+        if self.ibsave.is_some() {
+            env::unset("IN_BACKGROUND");
+        }
+        if !started {
+            rc_plugin_run(hook::SERVICE_START_DONE, &self.applet);
+            rc_plugin_run(hook::SERVICE_START_OUT, &self.applet);
+        }
+
+        if state::rc_service_state(&self.applet) & flags::INACTIVE != 0 {
+            ewarnx(Some(&bcat!("WARNING: ", self.applet, " has started, but is inactive")));
+        } else if !started {
+            eerrorx(Some(&bcat!("ERROR: ", self.applet, " failed to start")));
+        }
+
+        if !SKIP_MARK.load(SeqCst) {
+            state::rc_service_mark(&self.applet, flags::STARTED);
+        }
+        EXCLUSIVE_FD.store(svc_unlock(&self.applet, EXCLUSIVE_FD.load(SeqCst)), SeqCst);
+        rc_plugin_run(hook::SERVICE_START_DONE, &self.applet);
+
+        // Now start any scheduled services, and those of what we provide
+        // (QUIRK: service and type swapped, so none).
+        Self::start_scheduled(&self.applet);
+        if self.deptree.is_some() {
+            for svc in self.depend(b"iprovide", &self.applet) {
+                Self::start_scheduled(&svc);
+            }
+        }
+        rc_plugin_run(hook::SERVICE_START_OUT, &self.applet);
+    }
+
+    /// `svc_start()`.
+    fn svc_start(&mut self) -> i32 {
+        if self.dry_run {
+            einfon(Some(b"start:"));
+        } else {
+            self.svc_start_check();
+        }
+        if self.deps {
+            self.svc_start_deps();
+        }
+        if self.dry_run {
+            stdio::out(&bcat!(" ", self.applet, "\n"));
+        } else {
+            self.svc_start_real();
+        }
         0
     }
 }
@@ -547,8 +897,9 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
 
     // IN_BACKGROUND is only for this service, not for its dependents.
     let mut in_background = false;
-    if let Some(ib) = env::get("IN_BACKGROUND") {
-        in_background = rc::misc::rc_yesno(Some(&ib));
+    let ibsave = env::get("IN_BACKGROUND");
+    if let Some(ib) = &ibsave {
+        in_background = rc::misc::rc_yesno(Some(ib));
         env::unset("IN_BACKGROUND");
     }
     if rc::misc::rc_yesno(env::get("IN_DRYRUN").as_deref()) {
@@ -560,19 +911,30 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
         }
         in_background = true;
     }
-    // TODO(phase4-step2): deps, dry_run and in_background drive start/stop.
-    let _ = (deps, dry_run, in_background);
 
     for sig in [libc::SIGHUP, libc::SIGALRM, libc::SIGUSR1, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGCHLD] {
         sys::signal_setup(sig, handle_signal);
     }
-    // TODO(phase4-step2): rc_plugin_load().
+    plugin::rc_plugin_load();
 
     if g.optind >= g.args.len() {
         usage.usage(1);
     }
 
-    let mut run = Run { applet: applet.clone(), service, runlevel, prefix, deptree: None };
+    let mut run = Run {
+        applet: applet.clone(),
+        service,
+        runlevel,
+        prefix,
+        deptree: None,
+        deps,
+        dry_run,
+        in_background,
+        ibsave,
+        need_services: Vec::new(),
+        want_services: Vec::new(),
+        use_services: Vec::new(),
+    };
     let mut retval = 0;
     let cmds: Vec<Vec<u8>> = g.args[g.optind..].to_vec();
     for cmd in &cmds {
@@ -590,7 +952,8 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
                 Cmd::Simple => run.simple_command(cmd),
                 Cmd::Deptype => run.resolve_deptype(cmd),
                 Cmd::Zap => run.cmd_zap(),
-                Cmd::Start | Cmd::Stop | Cmd::Restart | Cmd::Condrestart => {
+                Cmd::Start => run.svc_start(),
+                Cmd::Stop | Cmd::Restart | Cmd::Condrestart => {
                     eerrorx(Some(&bcat!(applet, ": `", cmd, "' is not ported yet")))
                 }
             },

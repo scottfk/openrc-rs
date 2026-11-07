@@ -6,9 +6,11 @@
 //! reimplements those routines with the exact semantics OpenRC relies on.
 //!
 //! It is also the only crate in the workspace that talks to libc directly:
-//! everything `unsafe` lives in [`sys`] and [`stdio`] behind safe wrappers.
+//! everything `unsafe` lives in [`sys`], [`stdio`], [`exec`] and [`dl`] behind
+//! safe wrappers.
 
 pub mod bytes;
+pub mod dl;
 pub mod env;
 pub mod exec;
 pub mod getopt;

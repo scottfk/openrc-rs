@@ -166,6 +166,23 @@ pub fn do_exec(args: &ExecArgs) -> Result<ExecResult, Errno> {
 /// while signals are still blocked, so a SIGCHLD handler can already
 /// recognise it.  Err(errno) if fork, the dups or exec failed.
 pub fn spawn(path: &[u8], argv: &[Vec<u8>], out_err: Option<i32>, on_pid: impl FnOnce(i32)) -> Result<i32, Errno> {
+    spawn_impl(path, argv, out_err, on_pid, false)
+}
+
+/// `posix_spawn()` with `POSIX_SPAWN_SETSIGMASK` and an empty mask (as
+/// `exec_service()` in shared/misc.c does): run `path` with the current
+/// environment and every signal unblocked in the child.
+pub fn spawn_unmasked(path: &[u8], argv: &[Vec<u8>]) -> Result<i32, Errno> {
+    spawn_impl(path, argv, None, |_| {}, true)
+}
+
+fn spawn_impl(
+    path: &[u8],
+    argv: &[Vec<u8>],
+    out_err: Option<i32>,
+    on_pid: impl FnOnce(i32),
+    empty_mask: bool,
+) -> Result<i32, Errno> {
     let (exec_r, exec_w) = pipe2()?;
     let cmd = to_cstring(path);
     let argv: Vec<CString> = argv.iter().map(|a| to_cstring(a)).collect();
@@ -188,7 +205,12 @@ pub fn spawn(path: &[u8], argv: &[Vec<u8>], out_err: Option<i32>, on_pid: impl F
         }
         if pid == 0 {
             if fd < 0 || (libc::dup2(fd, 1) >= 0 && libc::dup2(fd, 2) >= 0) {
-                libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+                if empty_mask {
+                    libc::sigemptyset(&mut full);
+                    libc::sigprocmask(libc::SIG_SETMASK, &full, std::ptr::null_mut());
+                } else {
+                    libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+                }
                 unsafe extern "C" {
                     static environ: *const *const libc::c_char;
                 }

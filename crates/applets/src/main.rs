@@ -6,6 +6,7 @@
 //! `openrc-rs --list` prints `<install-dir> <applet>` lines for installers.
 
 mod applets;
+mod plugin;
 mod shared;
 
 use std::os::unix::ffi::OsStringExt;
