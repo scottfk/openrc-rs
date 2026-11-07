@@ -25,7 +25,7 @@ A drop-in port/reimplementation of openrc in rust.  Currently just something fun
 | `crates/rc` | Port of `librc`. So far: rc.conf parsing, user mode, the script path, `rc_sys()`. |
 | `crates/applets` | The `openrc-rs` multi-call binary. It picks the applet from `argv[0]`. |
 | `crates/capi-einfo` | C ABI: Rust staticlib plus a C shim for the variadic functions, linked into `libeinfo.so.1` by `make`. |
-| `crates/capi-rc` | C ABI: `librc.so.1`, a hybrid during Phase 2. It's Rust for the functions ported so far and upstream's C for the rest ([details](crates/capi-rc/README.md)). |
+| `crates/capi-rc` | C ABI: a drop-in `librc.so.1`, all Rust ([details](crates/capi-rc/README.md)). |
 | `tests/capi` | C program used to diff our C ABI against the reference library. |
 | `tools/build-reference.sh` | Builds upstream C OpenRC at the pinned tag ([tools/REFERENCE_TAG](tools/REFERENCE_TAG)) for differential testing. |
 
@@ -83,7 +83,8 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] runlevels and service state
    - [x] daemons (`librc-daemon.c`)
    - [x] dependency tree (`librc-depend.c`): cache generation, loading, staleness, `depends` and `order`
-   - [ ] VM: boot C OpenRC on our `librc.so.1`
+   - [x] string lists and `rc_config_value()`: `librc.so.1` is all Rust, upstream's C deleted
+   - [x] VM: boot C OpenRC on the all-Rust `librc.so.1`
 3. **Query and admin tools:** `rc-status`, `rc-update`, `rc-service`, `rc-depend`, `service`, `mark_service_*`.
 4. **`openrc-run`**
 5. **`openrc`**, the runlevel engine.

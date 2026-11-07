@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,8 @@
 #include <rc.h>
 
 static RC_DEPTREE *tree;
+static RC_STRINGLIST *sl;	/* the list the sl* commands work on */
+static RC_STRING *held;		/* a node kept across sl* commands */
 static time_t age_to;
 
 /* "-" is NULL; otherwise a comma-separated list (empty items kept). */
@@ -133,6 +136,36 @@ static const char *nul(const char *s)
 }
 
 /* Run one command at argv[0]; returns how many args it used. */
+/* Print sl's values, and check every TAILQ link. */
+static void sl_show(void)
+{
+	RC_STRING *s, **prev;
+	bool ok = true;
+	int i = 0, held_at = -1;
+
+	if (!sl) {
+		printf("sl: (null)\n");
+		return;
+	}
+	printf("sl:");
+	prev = &sl->tqh_first;
+	for (s = sl->tqh_first; s; s = s->entries.tqe_next) {
+		printf(" [%s]", s->value ? s->value : "(NULL)");
+		if (s->entries.tqe_prev != prev)
+			ok = false;
+		if (s == held)
+			held_at = i;
+		prev = &s->entries.tqe_next;
+		i++;
+	}
+	if (sl->tqh_last != prev)
+		ok = false;
+	printf(" links=%s", ok ? "ok" : "BAD");
+	if (held)
+		printf(held_at < 0 ? " held=[%s] (not on list)" : " held=[%s]@%d", held->value, held_at);
+	printf("\n");
+}
+
 static int run(int argc, char **argv)
 {
 	const char *c = argv[0];
@@ -331,6 +364,81 @@ static int run(int argc, char **argv)
 	} else if (!strcmp(c, "unsetenv")) {
 		unsetenv(a);
 		return 2;
+	} else if (!strcmp(c, "slnew")) {
+		rc_stringlist_free(sl);
+		sl = rc_stringlist_new();
+		held = NULL;
+		sl_show();
+		return 1;
+	} else if (!strcmp(c, "sladd") || !strcmp(c, "sladdu") || !strcmp(c, "sladdnull")) {
+		bool u = c[5] == 'u', nul = c[5] == 'n';
+		RC_STRING *r;
+		errno = 0;
+		r = u ? rc_stringlist_addu(sl, a) : rc_stringlist_add(sl, nul ? NULL : a);
+		printf("%s: %s", c, r ? "added" : "(null)");
+		if (r)
+			printf(" last=%s", r == (RC_STRING *)((char *)sl->tqh_last - offsetof(RC_STRING, entries.tqe_next)) ? "yes" : "no");
+		else
+			printf(" errno=%s", errno ? strerror(errno) : "0");
+		printf("\n");
+		sl_show();
+		return nul ? 1 : 2;
+	} else if (!strcmp(c, "sldel")) {
+		if (held && held->value && !strcmp(held->value, a))
+			held = NULL;	/* may be the node freed */
+		B("sldel", rc_stringlist_delete(sl, a));
+		sl_show();
+		return 2;
+	} else if (!strcmp(c, "slfind")) {
+		/* slfind V; slfind-null V searches a NULL list */
+		RC_STRING *r = rc_stringlist_find(sl, a);
+		printf("slfind %s: %s%s%s\n", a, r ? "[" : "", r ? r->value : "(null)", r ? "]" : "");
+		return 2;
+	} else if (!strcmp(c, "slfind-null")) {
+		RC_STRING *r = rc_stringlist_find(NULL, a);
+		printf("slfind-null %s: %s\n", a, r ? "found" : "(null)");
+		return 2;
+	} else if (!strcmp(c, "slhold")) {
+		held = rc_stringlist_find(sl, a);
+		sl_show();
+		return 2;
+	} else if (!strcmp(c, "slsplit")) {
+		/* slsplit VALUE SEP ("-" VALUE is NULL) */
+		rc_stringlist_free(sl);
+		held = NULL;
+		sl = rc_stringlist_split(strcmp(a, "-") ? a : NULL, b);
+		sl_show();
+		return 3;
+	} else if (!strcmp(c, "slsort")) {
+		RC_STRINGLIST *before = sl;
+		rc_stringlist_sort(&sl);
+		printf("slsort: head %s\n", sl == before ? "same" : "new");
+		sl_show();
+		return 1;
+	} else if (!strcmp(c, "slfree")) {
+		rc_stringlist_free(sl);
+		sl = NULL;
+		held = NULL;
+		rc_stringlist_free(NULL);
+		sl_show();
+		return 1;
+	} else if (!strcmp(c, "cfgval")) {
+		char *v = rc_config_value(sl, a);
+		printf("cfgval %s: %s%s%s", a, v ? "[" : "", v ? v : "(null)", v ? "]" : "");
+		if (v) {
+			RC_STRING *s;
+			for (s = sl->tqh_first; s; s = s->entries.tqe_next)
+				if (v > s->value && v <= s->value + strlen(s->value))
+					printf(" in [%s]", s->value);
+		}
+		printf("\n");
+		return 2;
+	} else if (!strcmp(c, "environ")) {
+		printf("rc_environ_fd: %s\n", rc_environ_fd ? "set" : "(null)");
+		rc_environ_fd = stdout;
+		printf("rc_environ_fd: %s\n", rc_environ_fd == stdout ? "stdout" : "?");
+		rc_environ_fd = NULL;
+		return 1;
 	}
 	printf("unknown command %s\n", c);
 	return 1;
