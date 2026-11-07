@@ -6,6 +6,7 @@
 # 20261107 - Add rc-depend option cases and mark_service_* round trips - Claude - scottfk
 # 20261107 - Add rc-service options and service_* state queries - Claude - scottfk
 # 20261107 - Add rc-update show/add/del/stack round trips - Claude - scottfk
+# 20261107 - Add rc-status modes, formats and state filters - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -76,3 +77,8 @@ run 'rc-update add sshd boot nonetwork; echo a=$?; rc-update show nonetwork; rc-
 run 'rc-update -a del nosuch; echo d=$?; rc-update -a add sshd; echo a=$?'
 run 'rc-update -s add nonetwork default; readlink /etc/runlevels/default/nonetwork; rc-update -s del nonetwork default; echo s=$?; rc-update -s add boot; echo s=$?'
 run 'rc-update -u; echo u=$?'
+run 'rc-status -f ini; rc-status -f ini -a'
+run 'rc-status -l; rc-status -r; rc-status -u; rc-status -m; rc-status -S'
+run 'rc-status -c; echo c=$?; rc-status nosuch; echo n=$?; rc-status nosuch boot; echo nb=$?'
+run 'rc-status -i started; rc-status -i stopped -i failed; rc-status -i bogus; echo i=$?'
+run 'rc-status -f json; echo f=$?; rc-status boot default nonetwork'

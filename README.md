@@ -89,7 +89,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] `rc-depend`, `mark_service_*`
    - [x] `rc-service` and the `service_*` helpers
    - [x] `rc-update`
-   - [ ] `rc-status`
+   - [x] `rc-status`
 4. **`openrc-run`**
 5. **`openrc`**, the runlevel engine.
 6. **`start-stop-daemon`, `supervise-daemon`**

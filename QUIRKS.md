@@ -128,6 +128,15 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `rc-update -s add` refuses `boot`, `single` and `shutdown` too, but the message always says `cannot stack the sysinit runlevel`. | `applets/rc_update.rs` |
 | low | When the runlevel comes from `softlevel` or the default and doesn't exist, `rc-update add`/`del` print `runlevel ... does not exist` but `add` still exits 0 (`del` exits 1 via its "not found in any of the specified runlevels" warning). | `applets/rc_update.rs` |
 
+## rc-status
+
+| Severity | Quirk | Where |
+|---|---|---|
+| low | A failed service in the current runlevel is listed again under `Dynamic Runlevel: manual`: the filter that drops runlevel services keeps any that are failed. | `applets/rc_status.rs` |
+| low | `-c`, `-l`, `-m`, `-r`, `-s`, `-S` and `-u` act as soon as getopt reaches them, so later options and arguments are ignored: `rc-status -l -c` only lists runlevels, `rc-status -r boot` prints the current runlevel. | `applets/rc_status.rs` |
+| low | A runlevel argument that doesn't exist is reported and skipped; rc-status exits 1 only when none of them exist. | `applets/rc_status.rs` |
+| low | A start time in the future gives a negative uptime (`-11:00:00`), and one that doesn't parse counts from 1969-12-31 23:59:59 (`20764 day(s) ...`). | `applets/rc_status.rs` (`get_uptime`, `to_time_t`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -164,6 +173,10 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **`rc-update -u` when the deptree can't be opened for writing (EACCES):**
   C returns an uninitialised variable (0 in practice, on the builds tried);
   we return 0.
+- **`rc-status` without a deptree** (none cached and none can be written):
+  C passes the NULL deptree to `rc_deptree_depends()` while sorting out
+  needed/wanted services and crashes if there are any candidates. We treat
+  it as empty, so they're all listed as manual.
 - **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
   we return NULL. (A NULL *value* inside a list still crashes in
   `strcmp()`, as in C.)
