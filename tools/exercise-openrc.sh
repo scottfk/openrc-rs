@@ -7,6 +7,7 @@
 # 20261107 - Add rc-service options and service_* state queries - Claude - scottfk
 # 20261107 - Add rc-update show/add/del/stack round trips - Claude - scottfk
 # 20261107 - Add rc-status modes, formats and state filters - Claude - scottfk
+# 20261107 - Add openrc-run simple commands (ours when swapped in, though not installed yet) - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -82,3 +83,15 @@ run 'rc-status -l; rc-status -r; rc-status -u; rc-status -m; rc-status -S'
 run 'rc-status -c; echo c=$?; rc-status nosuch; echo n=$?; rc-status nosuch boot; echo nb=$?'
 run 'rc-status -i started; rc-status -i stopped -i failed; rc-status -i bogus; echo i=$?'
 run 'rc-status -f json; echo f=$?; rc-status boot default nonetwork'
+# openrc-run isn't installed until its port is complete: when swapped in,
+# call ours through the multi-call binary.
+OR=/sbin/openrc-run
+[[ -x /usr/libexec/rc/openrc-rs ]] && OR="/usr/libexec/rc/openrc-rs openrc-run"
+export OR
+run '$OR /etc/init.d/sshd describe; $OR /etc/init.d/local describe'
+run '$OR /etc/init.d/sshd status; echo s=$?; $OR /etc/init.d/netmount status; $OR /etc/init.d/savecache status; echo s=$?'
+run '$OR /etc/init.d/sshd ineed iuse iwant iafter ibefore iprovide; $OR /etc/init.d/localmount needsme usesme wantsme'
+run '$OR /etc/init.d/sshd -s status; echo s=$?; $OR /etc/init.d/sshd -S status; echo S=$?'
+run '$OR /etc/init.d/sshd checkconfig; echo c=$?; $OR /etc/init.d/sshd nosuchcmd; echo n=$?'
+run '$OR /etc/init.d/sshd; echo u=$?; $OR; echo d=$?'
+run '$OR /etc/init.d/local -v describe; $OR /etc/init.d/local -d status 2>&1 | grep -c .'

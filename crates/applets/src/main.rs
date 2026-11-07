@@ -25,7 +25,7 @@ fn main() {
     if name == b"openrc-rs" {
         match args.get(1).map(Vec::as_slice) {
             Some(b"--list") => {
-                for a in applets::APPLETS {
+                for a in applets::APPLETS.iter().filter(|a| a.dir != applets::InstallDir::Pending) {
                     stdio::out(&bcat!(a.dir.as_str(), " ", a.name, "\n"));
                 }
                 stdio::exit(0);

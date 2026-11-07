@@ -160,6 +160,59 @@ pub fn do_exec(args: &ExecArgs) -> Result<ExecResult, Errno> {
     }
 }
 
+/// `posix_spawn(&pid, path, actions, NULL, argv, environ)`: run `path`
+/// (no PATH search) with the current environment, with `out_err` (if
+/// given) dup'ed onto stdout and stderr.  `on_pid` gets the child's pid
+/// while signals are still blocked, so a SIGCHLD handler can already
+/// recognise it.  Err(errno) if fork, the dups or exec failed.
+pub fn spawn(path: &[u8], argv: &[Vec<u8>], out_err: Option<i32>, on_pid: impl FnOnce(i32)) -> Result<i32, Errno> {
+    let (exec_r, exec_w) = pipe2()?;
+    let cmd = to_cstring(path);
+    let argv: Vec<CString> = argv.iter().map(|a| to_cstring(a)).collect();
+    let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    argv_ptrs.push(std::ptr::null());
+    let fd = out_err.unwrap_or(-1);
+
+    // SAFETY: the child only calls async-signal-safe functions before
+    // exec or _exit; all memory it touches was prepared above.
+    unsafe {
+        let mut full: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut full);
+        libc::sigprocmask(libc::SIG_SETMASK, &full, &mut old);
+        let pid = libc::fork();
+        if pid < 0 {
+            let e = Errno::last();
+            libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+            return Err(e);
+        }
+        if pid == 0 {
+            if fd < 0 || (libc::dup2(fd, 1) >= 0 && libc::dup2(fd, 2) >= 0) {
+                libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+                unsafe extern "C" {
+                    static environ: *const *const libc::c_char;
+                }
+                libc::execve(cmd.as_ptr(), argv_ptrs.as_ptr(), environ);
+            }
+            let err = *libc::__errno_location();
+            libc::write(exec_w.as_raw_fd(), (&err as *const i32).cast(), std::mem::size_of::<i32>());
+            libc::_exit(127);
+        }
+
+        drop(exec_w);
+        let mut err: i32 = 0;
+        let n = libc::read(exec_r.as_raw_fd(), (&mut err as *mut i32).cast(), std::mem::size_of::<i32>());
+        if n != 0 {
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+            libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+            return Err(Errno(if n == std::mem::size_of::<i32>() as isize { err } else { libc::EINVAL }));
+        }
+        on_pid(pid);
+        libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+        Ok(pid)
+    }
+}
+
 /// `rc_waitpid()`: wait for `pid`, retrying on EINTR; -1 on error.
 pub fn rc_waitpid(pid: i32) -> i32 {
     loop {

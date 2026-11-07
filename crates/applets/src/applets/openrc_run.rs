@@ -1,0 +1,608 @@
+//! `openrc-run`: port of `src/openrc-run/openrc-run.c`, the interpreter
+//! for init scripts (`#!/sbin/openrc-run`).  It sets up the environment
+//! and runs `openrc-run.sh` for each command, handling dependencies,
+//! locking and state for start and stop.
+//!
+//! Phase 4 step 1: everything except `start`, `stop`, `restart` and
+//! `condrestart` (and the plugin hooks they run), which follow in the next
+//! steps.  Until then the applet isn't installed.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
+
+use openrc_compat::getopt::{Getopt, HasArg, LongOpt};
+use openrc_compat::stdio::{self, Stream};
+use openrc_compat::{bcat, env, exec, num, sys};
+use openrc_einfo::{EColor, ecolor, eerror, eerrorx, einfo, einfov, eprefix, ewarnv};
+use rc::deptree::{self, DepTree, options};
+use rc::state::{self, flags};
+use rc::svcdir::{RcDir, rc_dirfd_raw, rc_svcdir};
+
+use crate::shared::{
+    Usage, default_runlevel, env_config, env_filter, getoptstring_common, rc_conf_yesno, rc_deptree_load_updating,
+};
+
+const GETOPTSTRING: &str = concat!("dDsSvl:Z", getoptstring_common!());
+const LONGOPTS: &[LongOpt] = &[
+    LongOpt::new("debug", HasArg::No, b'd'),
+    LongOpt::new("dry-run", HasArg::No, b'Z'),
+    LongOpt::new("ifstarted", HasArg::No, b's'),
+    LongOpt::new("ifstopped", HasArg::No, b'S'),
+    LongOpt::new("nodeps", HasArg::No, b'D'),
+    LongOpt::new("lockfd", HasArg::Required, b'l'),
+];
+const LONGOPTS_HELP: &[&str] = &[
+    "set xtrace when running the script",
+    "show what would be done",
+    "only run commands when started",
+    "only run commands when stopped",
+    "ignore dependencies",
+    "fd of the exclusive lock from rc",
+];
+const EXTRAOPTS: &str = "stop | start | restart | status | describe | zap";
+
+// --- State shared with the signal handler and the atexit cleanup ------------
+
+static SIGHUP: AtomicBool = AtomicBool::new(false);
+static SKIP_MARK: AtomicBool = AtomicBool::new(false);
+static TIMEDOUT: AtomicBool = AtomicBool::new(false);
+static SERVICE_PID: AtomicI32 = AtomicI32::new(0);
+static SIGNAL_PIPE_W: AtomicI32 = AtomicI32::new(-1);
+static EXCLUSIVE_FD: AtomicI32 = AtomicI32::new(-1);
+/// The applet (service) name, for messages from the handlers.
+static APPLET: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// Services to start again once we're done (`restart_services`).
+static RESTART_SERVICES: Mutex<Option<Vec<Vec<u8>>>> = Mutex::new(None);
+
+fn applet() -> Vec<u8> {
+    APPLET.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+extern "C" fn handle_signal(sig: i32) {
+    let serrno = sys::Errno::last().0;
+    use sys::libc;
+    match sig {
+        libc::SIGHUP => SIGHUP.store(true, SeqCst),
+        libc::SIGUSR1 => SKIP_MARK.store(true, SeqCst),
+        libc::SIGCHLD => {
+            while let Ok((pid, status)) = sys::waitpid(-1, libc::WNOHANG) {
+                if pid <= 0 {
+                    break;
+                }
+                let w = SIGNAL_PIPE_W.load(SeqCst);
+                if w > -1 && pid == SERVICE_PID.load(SeqCst) && sys::write_raw(w, &status.to_ne_bytes()) == -1 {
+                    let e = sys::Errno::last();
+                    eerror(Some(&bcat!(applet(), ": send: ", e.strerror())));
+                }
+            }
+        }
+        // (C has a SIGWINCH case, but never installs a handler for it.)
+        libc::SIGINT | libc::SIGTERM | libc::SIGQUIT => {
+            let signame = match sig {
+                libc::SIGINT => "SIGINT",
+                libc::SIGTERM => "SIGTERM",
+                _ => "SIGQUIT",
+            };
+            // Send the signal to our children too.
+            let pid = SERVICE_PID.load(SeqCst);
+            if pid > 0 {
+                let _ = sys::kill(pid, sig);
+            }
+            eerror(Some(&bcat!(applet(), ": caught ", signame, ", aborting")));
+            stdio::exit(1);
+        }
+        libc::SIGALRM => TIMEDOUT.store(true, SeqCst),
+        _ => {
+            eerror(Some(&bcat!(applet(), ": caught unknown signal ", sig.to_string().as_bytes())));
+        }
+    }
+    sys::set_errno(serrno);
+}
+
+fn unhotplug(applet: &[u8]) {
+    if let Err(e) = sys::at::unlinkat(rc_dirfd_raw(RcDir::Hotplugged), applet, 0)
+        && e.0 != sys::libc::ENOENT
+    {
+        eerror(Some(&bcat!(applet, ": unlink '", rc_svcdir(), "/hotplugged/", applet, "': ", e.strerror())));
+    }
+}
+
+/// `svc_unlock()` (shared/misc.c): drop the exclusive lock.
+fn svc_unlock(applet: &[u8], fd: i32) -> i32 {
+    let _ = sys::at::unlinkat(rc_dirfd_raw(RcDir::Exclusive), applet, 0);
+    sys::close_raw(fd);
+    -1
+}
+
+/// `restore_state()`: if we hold the lock and left the service half-way
+/// (starting or stopping), put it back.
+fn restore_state() {
+    let fd = EXCLUSIVE_FD.load(SeqCst);
+    if fd == -1 {
+        return;
+    }
+    let applet = applet();
+    let st = state::rc_service_state(&applet);
+    if st & flags::STOPPING != 0 {
+        state::rc_service_mark(&applet, if st & flags::WASINACTIVE != 0 { flags::INACTIVE } else { flags::STARTED });
+        if state::rc_runlevel_stopping() {
+            state::rc_service_mark(&applet, flags::FAILED);
+        }
+    } else if st & flags::STARTING != 0 {
+        state::rc_service_mark(&applet, if st & flags::WASINACTIVE != 0 { flags::INACTIVE } else { flags::STOPPED });
+        if state::rc_runlevel_starting() {
+            state::rc_service_mark(&applet, flags::FAILED);
+        }
+    }
+    EXCLUSIVE_FD.store(svc_unlock(&applet, fd), SeqCst);
+}
+
+/// `start_services()`: start (or schedule) the services in `list` that
+/// are stopped, if we got (or are getting) started.
+fn start_services(list: &[Vec<u8>]) {
+    let applet = applet();
+    let st = state::rc_service_state(&applet);
+    if st & (flags::INACTIVE | flags::WASINACTIVE | flags::STARTING | flags::STARTED) == 0 {
+        return;
+    }
+    for svc in list {
+        if state::rc_service_state(svc) & flags::STOPPED == 0 {
+            continue;
+        }
+        if st & (flags::INACTIVE | flags::WASINACTIVE) != 0 {
+            state::rc_service_schedule_start(&applet, svc);
+            openrc_einfo::ewarn(Some(&bcat!("WARNING: ", svc, " will start when ", applet, " has started")));
+        } else {
+            // TODO(phase4-step2): service_start() (exec_service).
+            let _ = svc;
+        }
+    }
+}
+
+extern "C" fn cleanup() {
+    restore_state();
+    let restart = RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(list) = restart {
+        start_services(&list);
+    }
+    stdio::flush();
+}
+
+// --- Running openrc-run.sh --------------------------------------------------
+
+/// The parts of C's file-scope state that the commands use.
+struct Run {
+    applet: Vec<u8>,
+    /// The realpath of the init script.
+    service: Vec<u8>,
+    runlevel: Vec<u8>,
+    /// eprefix() string with rc_parallel.
+    prefix: Option<Vec<u8>>,
+    deptree: Option<DepTree>,
+}
+
+/// `write_prefix()`: copy the child's output to stdout, with our prefix at
+/// the start of each line (but not before an eend's cursor-up), under
+/// `$svcdir/prefix.lock`.
+fn write_prefix(prefix: &[u8], buffer: &[u8], prefixed: &mut bool) {
+    let ec = ecolor(EColor::Hilite).to_bytes();
+    let ec_normal = ecolor(EColor::Normal).to_bytes();
+    // open() may fail when running as a user (RC_SVCDIR not writable).
+    let lock =
+        sys::at::openat(rc_dirfd_raw(RcDir::Svcdir), b"prefix.lock", sys::libc::O_WRONLY | sys::libc::O_CREAT, 0o664);
+    match &lock {
+        Ok(fd) => loop {
+            match sys::flock(std::os::fd::AsFd::as_fd(fd), sys::libc::LOCK_EX) {
+                Ok(()) => break,
+                Err(e) if e.0 == sys::libc::EINTR => continue,
+                Err(e) => {
+                    ewarnv(Some(&bcat!("flock() failed: ", e.strerror())));
+                    break;
+                }
+            }
+        },
+        Err(_) => {
+            ewarnv(Some(b"Couldn't open the prefix lock, please make sure you have enough permissions"));
+        }
+    }
+
+    for (i, &b) in buffer.iter().enumerate() {
+        // We don't prefix eend calls (cursor up).
+        if b == 0x1b && !*prefixed {
+            for &c in &buffer[i + 1..] {
+                if c == b'A' {
+                    *prefixed = true;
+                }
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+        if !*prefixed {
+            sys::write_raw(1, ec);
+            sys::write_raw(1, openrc_compat::bytes::c_str_prefix(prefix));
+            sys::write_raw(1, ec_normal);
+            sys::write_raw(1, b"|");
+            *prefixed = true;
+        }
+        if b == b'\n' {
+            *prefixed = false;
+        }
+        sys::write_raw(1, &[b]);
+    }
+    drop(lock);
+}
+
+impl Run {
+    /// `svc_exec()`: run `openrc-run.sh <service> <command>` and wait for
+    /// it, relaying its output through a pty when prefixing.  Returns its
+    /// exit status (1 if it couldn't be started).
+    fn svc_exec(&self, command: &[u8]) -> i32 {
+        use sys::libc;
+        let mut ret = -1;
+        let (sig_r, sig_w) = match sys::pipe2_cloexec() {
+            Ok(p) => p,
+            Err(_) => {
+                // QUIRK: names the applet where the error should be.
+                eerror(Some(&bcat!(self.applet, ": pipe2: ", self.applet)));
+                return 1;
+            }
+        };
+        let sig_r_raw = std::os::fd::AsRawFd::as_raw_fd(&sig_r);
+        SIGNAL_PIPE_W.store(std::os::fd::IntoRawFd::into_raw_fd(sig_w), SeqCst);
+
+        // A pty for prefixed output, so programs still see a terminal.  C
+        // never closes the slave in the parent, so the master never hangs
+        // up.
+        let mut master_tty = -1;
+        let mut slave_tty = None;
+        if self.prefix.is_some()
+            && Stream::Stdout.isatty()
+            && let Some((m, s)) = sys::openpty_like(1)
+        {
+            master_tty = m;
+            slave_tty = Some(s);
+        }
+
+        let mut argv0 = format!("{}/sh/openrc-run.sh", rc::paths::LIBEXECDIR).into_bytes();
+        if sys::at::faccessat(rc_dirfd_raw(RcDir::Svcdir), b"openrc-run.sh", libc::F_OK).is_ok() {
+            argv0 = bcat!(rc_svcdir(), "/openrc-run.sh");
+        }
+
+        einfov(Some(&bcat!("Executing: ", argv0, " ", self.service, " ", command)));
+        let argv = vec![argv0.clone(), self.service.clone(), command.to_vec()];
+        if let Err(e) = exec::spawn(&argv0, &argv, slave_tty, |pid| SERVICE_PID.store(pid, SeqCst)) {
+            eerror(Some(&bcat!(self.service, ": exec '", argv0, "': ", e.strerror())));
+            return 1;
+        }
+
+        let mut fds = [
+            sys::PollFd { fd: sig_r_raw, events: libc::POLLIN, revents: 0 },
+            sys::PollFd { fd: master_tty, events: libc::POLLIN, revents: 0 },
+        ];
+        let mut prefixed = false;
+        loop {
+            let n = if master_tty >= 0 { 2 } else { 1 };
+            if let Err(e) = sys::poll(&mut fds, n, -1) {
+                if e.0 == libc::EINTR {
+                    continue;
+                }
+                eerror(Some(&bcat!(self.applet, ": poll: ", e.strerror())));
+                break;
+            }
+            if n == 2 && fds[1].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+                let mut buffer = [0u8; 8192];
+                // Deviation: C passes a failed read's -1 on as a length.
+                let r = sys::read_raw(master_tty, &mut buffer).max(0) as usize;
+                write_prefix(self.prefix.as_deref().unwrap_or_default(), &buffer[..r], &mut prefixed);
+            }
+            // The signal pipe receives the service's exit status.
+            if fds[0].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+                sys::set_errno(0);
+                let mut status = [0u8; 4];
+                if sys::read_raw(sig_r_raw, &mut status) < 4 {
+                    let e = sys::Errno::last();
+                    let why = if e.0 != 0 { e.strerror() } else { b"short read".to_vec() };
+                    eerror(Some(&bcat!(self.applet, ": receive failed: ", why)));
+                } else {
+                    // QUIRK: WEXITSTATUS of the raw status, so a script
+                    // killed by a signal counts as success.  (C also
+                    // checks errno == ECHILD here, which it can't be.)
+                    ret = (i32::from_ne_bytes(status) >> 8) & 0xff;
+                }
+                break;
+            }
+        }
+
+        let old = sys::block_signal(libc::SIGCHLD);
+        drop(sig_r);
+        let w = SIGNAL_PIPE_W.swap(-1, SeqCst);
+        sys::close_raw(w);
+        sys::restore_sigmask(&old);
+
+        if master_tty >= 0 {
+            sys::close_raw(master_tty);
+        }
+        // (The slave stays open, as in C.)
+        SERVICE_PID.store(0, SeqCst);
+        ret
+    }
+
+    /// `simple_command()`: run a command without prefixing its output.
+    fn simple_command(&mut self, command: &[u8]) -> i32 {
+        let save = self.prefix.take();
+        eprefix(None);
+        let ret = self.svc_exec(command);
+        eprefix(save.as_deref());
+        self.prefix = save;
+        ret
+    }
+
+    /// `resolve_deptype()`: print the services of one dependency type.
+    fn resolve_deptype(&mut self, deptype: &[u8]) -> i32 {
+        let mut depoptions = options::TRACE;
+        let (strict, err) = rc_conf_yesno("rc_depend_strict");
+        if strict || err == Some(sys::libc::ENOENT) {
+            depoptions |= options::STRICT;
+        }
+        if self.deptree.is_none() {
+            self.deptree = rc_deptree_load_updating(0, None);
+            if self.deptree.is_none() {
+                eerrorx(Some(b"failed to load deptree"));
+            }
+        }
+        let tree = self.deptree.as_ref().expect("loaded above");
+        let (services, _) = deptree::rc_deptree_depends(
+            tree,
+            Some(&[deptype.to_vec()]),
+            std::slice::from_ref(&self.applet),
+            Some(&self.runlevel),
+            depoptions,
+        );
+        let mut out = Vec::new();
+        for s in services {
+            out.extend_from_slice(&bcat!(openrc_compat::bytes::c_str_prefix(&s), " "));
+        }
+        out.push(b'\n');
+        stdio::out(&out);
+        0
+    }
+
+    fn cmd_zap(&self) -> i32 {
+        einfo(Some(&bcat!("Manually resetting ", self.applet, " to stopped state")));
+        if !state::rc_service_mark(&self.applet, flags::STOPPED) {
+            let e = sys::Errno::last();
+            eerrorx(Some(&bcat!("rc_service_mark: ", e.strerror())));
+        }
+        unhotplug(&self.applet);
+        0
+    }
+}
+
+/// `service_plugable()`: may this service be hotplugged (`rc_hotplug`)?
+fn service_plugable(applet: &[u8]) -> bool {
+    let Some(list) = rc::conf::rc_conf_value("rc_hotplug").or_else(|| rc::conf::rc_conf_value("rc_plug_services"))
+    else {
+        return false;
+    };
+    let list = openrc_compat::bytes::c_str_prefix(&list);
+    for token in list.split(|&b| b == b' ') {
+        let (allow, pat) = match token.strip_prefix(b"!") {
+            Some(rest) => (false, rest),
+            None => (true, token),
+        };
+        if sys::fnmatch(pat, applet, 0) {
+            return allow;
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy)]
+enum Cmd {
+    Simple,
+    Deptype,
+    Start,
+    Stop,
+    Restart,
+    Condrestart,
+    Zap,
+}
+
+/// The commands openrc-run handles itself: `(name, handler, reset the
+/// restart list afterwards)`.  Anything else goes to openrc-run.sh.
+const COMMANDS: &[(&str, Cmd, bool)] = &[
+    ("describe", Cmd::Simple, false),
+    ("help", Cmd::Simple, false),
+    ("depend", Cmd::Simple, false),
+    ("status", Cmd::Simple, false),
+    ("ineed", Cmd::Deptype, false),
+    ("iuse", Cmd::Deptype, false),
+    ("iwant", Cmd::Deptype, false),
+    ("needsme", Cmd::Deptype, false),
+    ("usesme", Cmd::Deptype, false),
+    ("wantsme", Cmd::Deptype, false),
+    ("iafter", Cmd::Deptype, false),
+    ("ibefore", Cmd::Deptype, false),
+    ("iprovide", Cmd::Deptype, false),
+    ("start", Cmd::Start, true),
+    ("stop", Cmd::Stop, true),
+    ("restart", Cmd::Restart, true),
+    ("condrestart", Cmd::Condrestart, true),
+    ("conditionalrestart", Cmd::Condrestart, true),
+    ("zap", Cmd::Zap, true),
+];
+
+pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
+    use sys::libc;
+
+    // Show help if insufficient args.
+    if args.len() < 2 || sys::access(&args[1], libc::F_OK).is_err() {
+        stdio::err(b"openrc-run should not be run directly\n");
+        stdio::exit(1);
+    }
+    if let Err(e) = sys::stat(&args[1]) {
+        stdio::err(&bcat!("openrc-run '", args[1], "': ", e.strerror(), "\n"));
+        stdio::exit(1);
+    }
+    let Some(service) = sys::realpath(&args[1]) else {
+        let e = sys::Errno::last();
+        eerrorx(Some(&bcat!("readpath: ", e.strerror())));
+    };
+    let applet = openrc_compat::bytes::basename_c(&args[1]).to_vec();
+    *APPLET.lock().unwrap_or_else(|e| e.into_inner()) = applet.clone();
+
+    let usage = Usage {
+        applet: applet.clone(),
+        getoptstring: GETOPTSTRING,
+        longopts: LONGOPTS,
+        longopts_help: LONGOPTS_HELP,
+        extraopts: Some(EXTRAOPTS),
+        usagestring: None,
+    };
+    if args.len() < 3 {
+        usage.usage(1);
+    }
+    // TODO(selinux): selinux_setup(); upstream only with -Dselinux.
+
+    let mut deps = true;
+    let mut dry_run = false;
+    let longopts = usage.all_longopts();
+    // Punt the first argument: it's our service.
+    let argc = args.len() - 1;
+    let mut g = Getopt::new(args[1..].to_vec(), GETOPTSTRING);
+    while let Some(opt) = g.next_long(&longopts) {
+        match u8::try_from(opt).unwrap_or(0) {
+            b'd' => env::set("RC_DEBUG", b"YES"),
+            b'l' => {
+                let fd = num::atoi(g.optarg.as_deref().unwrap_or_default());
+                EXCLUSIVE_FD.store(fd, SeqCst);
+                sys::set_cloexec(fd);
+            }
+            b's' => {
+                if state::rc_service_state(&applet) & flags::STARTED == 0 {
+                    stdio::exit(1);
+                }
+            }
+            b'S' => {
+                if state::rc_service_state(&applet) & flags::STOPPED == 0 {
+                    stdio::exit(1);
+                }
+            }
+            b'D' => deps = false,
+            b'Z' => dry_run = true,
+            _ => usage.common_option(opt, argc),
+        }
+    }
+
+    // Run init scripts from / (a user's services from their HOME).
+    let mut workingdir = b"/".to_vec();
+    if rc::dirs::rc_is_user() {
+        match env::get("HOME") {
+            Some(h) => workingdir = h,
+            None => eerrorx(Some(b"HOME is unset.")),
+        }
+    }
+    if let Err(e) = sys::chdir(&workingdir) {
+        eerror(Some(&bcat!("chdir: ", e.strerror())));
+    }
+
+    sys::atexit(cleanup);
+
+    let runlevel = match env::get("RC_RUNLEVEL") {
+        Some(r) => r,
+        None => {
+            env_filter();
+            env_config();
+            default_runlevel()
+        }
+    };
+
+    env::set("EINFO_LOG", &applet);
+    env::set("RC_SVCNAME", &applet);
+    // Our pid, so mark_service_* in any subshell can tell us of changes.
+    let pidstr = sys::getpid().to_string();
+    env::set("RC_OPENRC_PID", pidstr.as_bytes());
+    // RC_RUNSCRIPT_PID is deprecated, but kept for a while for safety.
+    env::set("RC_RUNSCRIPT_PID", pidstr.as_bytes());
+
+    // With rc_parallel, prefix output with our name, padded to the longest
+    // service name.
+    let mut prefix = None;
+    if rc_conf_yesno("rc_parallel").0 {
+        let l = state::rc_services_in_runlevel(None).iter().map(Vec::len).chain([applet.len()]).max().unwrap_or(0);
+        let mut p = applet.clone();
+        p.resize(l, b' ');
+        eprefix(Some(&p));
+        prefix = Some(p);
+    }
+
+    if rc::misc::rc_yesno(env::get("RC_NODEPS").as_deref()) {
+        deps = false;
+    }
+    // Changing runlevels and not called by rc: no dependencies.
+    if deps && env::get("RC_PID").is_none() && (state::rc_runlevel_starting() || state::rc_runlevel_stopping()) {
+        deps = false;
+    }
+
+    // IN_BACKGROUND is only for this service, not for its dependents.
+    let mut in_background = false;
+    if let Some(ib) = env::get("IN_BACKGROUND") {
+        in_background = rc::misc::rc_yesno(Some(&ib));
+        env::unset("IN_BACKGROUND");
+    }
+    if rc::misc::rc_yesno(env::get("IN_DRYRUN").as_deref()) {
+        dry_run = true;
+    }
+    if rc::misc::rc_yesno(env::get("IN_HOTPLUG").as_deref()) {
+        if !service_plugable(&applet) {
+            eerrorx(Some(&bcat!(applet, ": not allowed to be hotplugged")));
+        }
+        in_background = true;
+    }
+    // TODO(phase4-step2): deps, dry_run and in_background drive start/stop.
+    let _ = (deps, dry_run, in_background);
+
+    for sig in [libc::SIGHUP, libc::SIGALRM, libc::SIGUSR1, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGCHLD] {
+        sys::signal_setup(sig, handle_signal);
+    }
+    // TODO(phase4-step2): rc_plugin_load().
+
+    if g.optind >= g.args.len() {
+        usage.usage(1);
+    }
+
+    let mut run = Run { applet: applet.clone(), service, runlevel, prefix, deptree: None };
+    let mut retval = 0;
+    let cmds: Vec<Vec<u8>> = g.args[g.optind..].to_vec();
+    for cmd in &cmds {
+        // Abort on a SIGHUP here.
+        if SIGHUP.load(SeqCst) {
+            stdio::exit(1);
+        }
+        // Export the command we're running: some start/stop functions
+        // behave differently when restarting.
+        env::set("RC_CMD", cmd);
+
+        let found = COMMANDS.iter().find(|(name, _, _)| name.as_bytes() == &cmd[..]);
+        let cmdval = match found {
+            Some(&(_, handler, _)) => match handler {
+                Cmd::Simple => run.simple_command(cmd),
+                Cmd::Deptype => run.resolve_deptype(cmd),
+                Cmd::Zap => run.cmd_zap(),
+                Cmd::Start | Cmd::Stop | Cmd::Restart | Cmd::Condrestart => {
+                    eerrorx(Some(&bcat!(applet, ": `", cmd, "' is not ported yet")))
+                }
+            },
+            None => run.svc_exec(cmd),
+        };
+        if cmdval != 0 {
+            retval = cmdval;
+        }
+        // After an action (or any script command) the list must be empty.
+        if found.is_none_or(|&(_, _, reset)| reset) {
+            *RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+    retval
+}
