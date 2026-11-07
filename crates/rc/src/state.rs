@@ -50,6 +50,8 @@ const STATE_NAMES: &[(i32, Option<RcDir>, &str)] = &[
 
 pub const RC_LEVEL_SINGLE: &[u8] = b"single";
 pub const RC_LEVEL_BOOT: &[u8] = b"boot";
+pub const RC_LEVEL_SYSINIT: &[u8] = b"sysinit";
+pub const RC_LEVEL_SHUTDOWN: &[u8] = b"shutdown";
 
 /// `rc_dirfd(dir)`; `RC_DIR_INVALID` (None) gives -1, as in C.
 fn dirfd(dir: Option<RcDir>) -> i32 {

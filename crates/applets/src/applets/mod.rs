@@ -9,6 +9,7 @@ pub mod mountinfo;
 pub mod newer;
 pub mod rc_depend;
 pub mod rc_service;
+pub mod rc_update;
 pub mod seedrng;
 pub mod service;
 pub mod shell_var;
@@ -123,6 +124,7 @@ pub const APPLETS: &[Applet] = &[
     rc_sbin("mark_service_crashed", mark_service::main),
     rc_sbin("seedrng", seedrng::main),
     sbin("rc-service", rc_service::main),
+    sbin("rc-update", rc_update::main),
     rc_sbin("swclock", swclock::main),
 ];
 
