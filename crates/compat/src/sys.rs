@@ -832,3 +832,120 @@ pub fn symlink(target: &[u8], path: &[u8]) -> Result<(), Errno> {
 pub fn unlink(path: &[u8]) -> Result<(), Errno> {
     at::unlinkat(libc::AT_FDCWD, path, 0)
 }
+
+// --- Process plumbing for openrc-run ----------------------------------------
+
+/// `atexit(f)`: run `f` when the process exits through `exit()` (which
+/// `std::process::exit`, and so [`crate::stdio::exit`], calls).
+pub fn atexit(f: extern "C" fn()) -> bool {
+    // SAFETY: f is a plain function pointer with the C ABI.
+    unsafe { libc::atexit(f) == 0 }
+}
+
+/// `signal_setup()` (shared/misc.c): install `handler` for `sig` with an
+/// empty mask and no flags (so, unlike `signal()`, no `SA_RESTART`).
+pub fn signal_setup(sig: i32, handler: extern "C" fn(i32)) -> i32 {
+    // SAFETY: sigaction is plain data; the handler has the C signature.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_sigaction = handler as libc::sighandler_t;
+        libc::sigaction(sig, &sa, std::ptr::null_mut())
+    }
+}
+
+/// `pipe2(fds, O_CLOEXEC)`: `(read end, write end)`.
+pub fn pipe2_cloexec() -> Result<(OwnedFd, OwnedFd), Errno> {
+    let mut fds = [0; 2];
+    // SAFETY: fds has room for two fds.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+        return Err(Errno::last());
+    }
+    // SAFETY: pipe2 just created these and nothing else owns them.
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// `write(fd, buf, len)` on a raw fd, as is (async-signal-safe).
+pub fn write_raw(fd: i32, buf: &[u8]) -> isize {
+    // SAFETY: buf is valid for its length; a bad fd just fails.
+    unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) }
+}
+
+/// `read(fd, buf, len)` on a raw fd, as is.
+pub fn read_raw(fd: i32, buf: &mut [u8]) -> isize {
+    // SAFETY: buf is valid for its length; a bad fd just fails.
+    unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) }
+}
+
+/// `close(fd)` on a raw fd that was handed out as an integer.
+pub fn close_raw(fd: i32) -> i32 {
+    // SAFETY: closing an fd we own (or a bad one, which just fails).
+    unsafe { libc::close(fd) }
+}
+
+/// `fcntl(fd, F_SETFD, fcntl(fd, F_GETFD, 0) | FD_CLOEXEC)`.
+pub fn set_cloexec(fd: i32) {
+    // SAFETY: fcntl on an int fd; errors are ignored, as in C.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD, 0);
+        libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+    }
+}
+
+/// A `struct pollfd`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PollFd {
+    pub fd: i32,
+    pub events: i16,
+    pub revents: i16,
+}
+
+/// `poll(fds, nfds, timeout)` over the first `n` of `fds`.
+pub fn poll(fds: &mut [PollFd], n: usize, timeout: i32) -> Result<i32, Errno> {
+    let mut raw: Vec<libc::pollfd> =
+        fds[..n].iter().map(|p| libc::pollfd { fd: p.fd, events: p.events, revents: p.revents }).collect();
+    // SAFETY: raw holds n valid pollfds.
+    let r = unsafe { libc::poll(raw.as_mut_ptr(), n as libc::nfds_t, timeout) };
+    for (p, r) in fds.iter_mut().zip(&raw) {
+        p.revents = r.revents;
+    }
+    if r < 0 { Err(Errno::last()) } else { Ok(r) }
+}
+
+/// `tcgetattr(fd)` + `ioctl(fd, TIOCGWINSZ)` + `openpty()` with those
+/// settings, then FD_CLOEXEC on both ends when their fd flags were 0.
+/// `(master, slave)` as raw fds, or None if openpty failed.
+pub fn openpty_like(fd: i32) -> Option<(i32, i32)> {
+    // SAFETY: termios and winsize are plain data (C ignores failures and
+    // uses whatever is in them); openpty writes two fds.
+    unsafe {
+        let mut tt: libc::termios = std::mem::zeroed();
+        let mut ws: libc::winsize = std::mem::zeroed();
+        libc::tcgetattr(fd, &mut tt);
+        libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws);
+        let (mut master, mut slave) = (-1, -1);
+        if libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), &tt, &ws) != 0 {
+            return None;
+        }
+        for fd in [master, slave] {
+            if fd >= 0 && libc::fcntl(fd, libc::F_GETFD, 0) == 0 {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+        }
+        Some((master, slave))
+    }
+}
+
+/// Block `sig`; returns the previous mask for [`restore_sigmask`].
+pub fn block_signal(sig: i32) -> libc::sigset_t {
+    // SAFETY: sigset_t is plain data, initialised by sigemptyset/sigprocmask.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, sig);
+        libc::sigemptyset(&mut old);
+        libc::sigprocmask(libc::SIG_BLOCK, &set, &mut old);
+        old
+    }
+}

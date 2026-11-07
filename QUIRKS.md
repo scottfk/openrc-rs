@@ -137,6 +137,16 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A runlevel argument that doesn't exist is reported and skipped; rc-status exits 1 only when none of them exist. | `applets/rc_status.rs` |
 | low | A start time in the future gives a negative uptime (`-11:00:00`), and one that doesn't parse counts from 1969-12-31 23:59:59 (`20764 day(s) ...`). | `applets/rc_status.rs` (`get_uptime`, `to_time_t`) |
 
+## openrc-run
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | A script killed by a signal counts as success: openrc-run takes `WEXITSTATUS()` of its status, which is 0 for a signal death. | `applets/openrc_run.rs` (`svc_exec`) |
+| medium | A service that matches none of the `rc_hotplug` patterns may be hotplugged: only a matching `!pattern` refuses. So `rc_hotplug="gamma"` lets every service in. | `applets/openrc_run.rs` (`service_plugable`) |
+| low | With `rc_parallel` on a terminal, output the script leaves unread in the pty when it exits is lost: openrc-run reads at most one buffer per poll round, stops once the exit status arrives, and never closes its copy of the pty slave, so the master never hangs up. | `applets/openrc_run.rs` (`svc_exec`) |
+| low | The SIGWINCH handler code is dead: openrc-run never installs it, so window size changes don't reach the pty. | `applets/openrc_run.rs` (`handle_signal`) |
+| low | If the signal pipe can't be made, the message names the service twice (`alpha: pipe2: alpha`) instead of giving the error. | `applets/openrc_run.rs` (`svc_exec`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -177,6 +187,12 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   C passes the NULL deptree to `rc_deptree_depends()` while sorting out
   needed/wanted services and crashes if there are any candidates. We treat
   it as empty, so they're all listed as manual.
+- **openrc-run reading the pty:** if a read of the pty master fails, C
+  passes the -1 on as a length and walks off the end of its buffer; we
+  treat it as nothing read.
+- **openrc-run's child pid:** C's SIGCHLD handler could, in principle, reap
+  the script before `posix_spawn()` has stored its pid, losing its exit
+  status. We record the pid with signals still blocked.
 - **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
   we return NULL. (A NULL *value* inside a list still crashes in
   `strcmp()`, as in C.)
