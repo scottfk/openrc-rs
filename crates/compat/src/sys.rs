@@ -501,6 +501,29 @@ pub fn ctime(t: i64) -> Vec<u8> {
     unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_bytes().to_vec()
 }
 
+/// `time(NULL)`.
+pub fn time() -> i64 {
+    // SAFETY: a null pointer is allowed.
+    unsafe { libc::time(std::ptr::null_mut()) }
+}
+
+/// `mktime()` of a local broken-down time with `tm_isdst = -1`; month is
+/// 1-based and year is the full year, as written.  -1 on failure.
+pub fn mktime(year: i32, month: i32, day: i32, hour: i32, min: i32, sec: i32) -> i64 {
+    // SAFETY: tm is plain data; mktime only reads and normalises it.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        tm.tm_year = year.wrapping_sub(1900);
+        tm.tm_mon = month.wrapping_sub(1);
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = -1;
+        libc::mktime(&mut tm)
+    }
+}
+
 /// `fnmatch(pattern, string, flags) == 0`.
 pub fn fnmatch(pattern: &[u8], string: &[u8], flags: i32) -> bool {
     let (p, s) = (to_cstring(pattern), to_cstring(string));

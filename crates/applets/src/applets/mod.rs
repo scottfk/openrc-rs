@@ -9,6 +9,7 @@ pub mod mountinfo;
 pub mod newer;
 pub mod rc_depend;
 pub mod rc_service;
+pub mod rc_status;
 pub mod rc_update;
 pub mod seedrng;
 pub mod service;
@@ -24,7 +25,6 @@ pub enum InstallDir {
     /// `$libexecdir/rc/sbin`.
     RcSbin,
     /// `$bindir`.
-    #[allow(dead_code)]
     Bin,
     /// `$sbindir`.
     Sbin,
@@ -53,6 +53,10 @@ pub struct Applet {
 
 const fn rc_bin(name: &'static str, main: Main) -> Applet {
     Applet { name, dir: InstallDir::RcBin, main }
+}
+
+const fn bin(name: &'static str, main: Main) -> Applet {
+    Applet { name, dir: InstallDir::Bin, main }
 }
 
 const fn sbin(name: &'static str, main: Main) -> Applet {
@@ -125,6 +129,7 @@ pub const APPLETS: &[Applet] = &[
     rc_sbin("seedrng", seedrng::main),
     sbin("rc-service", rc_service::main),
     sbin("rc-update", rc_update::main),
+    bin("rc-status", rc_status::main),
     rc_sbin("swclock", swclock::main),
 ];
 
