@@ -3,24 +3,9 @@
 
 use openrc_compat::{bcat, env, num, sys};
 use openrc_einfo::{eerror, eerrorx};
-use rc::state::{self, flags as st};
+use rc::state;
 
-/// `lookup_service_state()` (shared/misc.c), on the applet name minus
-/// its `mark_` prefix.  There is no `service_scheduled`.
-fn lookup_service_state(name: &[u8]) -> i32 {
-    match name {
-        b"service_started" => st::STARTED,
-        b"service_stopped" => st::STOPPED,
-        b"service_inactive" => st::INACTIVE,
-        b"service_starting" => st::STARTING,
-        b"service_stopping" => st::STOPPING,
-        b"service_hotplugged" => st::HOTPLUGGED,
-        b"service_wasinactive" => st::WASINACTIVE,
-        b"service_failed" => st::FAILED,
-        b"service_crashed" => st::CRASHED,
-        _ => 0,
-    }
-}
+use crate::shared::lookup_service_state;
 
 pub fn main(applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
     let svcname = env::get("RC_SVCNAME");
@@ -33,6 +18,7 @@ pub fn main(applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
         _ => eerrorx(Some(&bcat!(applet, ": no service specified"))),
     };
 
+    // The applet name minus its `mark_` prefix.
     let bit = match applet.strip_prefix(b"mark_") {
         Some(rest) => lookup_service_state(rest),
         None => 0,

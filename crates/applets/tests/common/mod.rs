@@ -65,6 +65,20 @@ fn reference_bin(refdir: &Path, applet: &str) -> PathBuf {
         ),
         ("value", &["service_get_value", "service_set_value", "service_export", "get_options", "save_options"]),
         ("mountinfo", &["do_unmount"]),
+        (
+            "service",
+            &[
+                "service_crashed",
+                "service_hotplugged",
+                "service_inactive",
+                "service_started",
+                "service_started_daemon",
+                "service_starting",
+                "service_stopped",
+                "service_stopping",
+                "service_wasinactive",
+            ],
+        ),
     ];
     let dir = SHARED
         .iter()

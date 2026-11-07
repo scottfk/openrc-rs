@@ -501,6 +501,33 @@ pub fn ctime(t: i64) -> Vec<u8> {
     unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_bytes().to_vec()
 }
 
+/// `fnmatch(pattern, string, flags) == 0`.
+pub fn fnmatch(pattern: &[u8], string: &[u8], flags: i32) -> bool {
+    let (p, s) = (to_cstring(pattern), to_cstring(string));
+    // SAFETY: valid C strings.
+    unsafe { libc::fnmatch(p.as_ptr(), s.as_ptr(), flags) == 0 }
+}
+
+/// `uname()`'s `sysname`, or None if uname fails.
+pub fn uname_sysname() -> Option<Vec<u8>> {
+    // SAFETY: utsname is plain data; uname fills it with C strings.
+    unsafe {
+        let mut uts: libc::utsname = std::mem::zeroed();
+        (libc::uname(&mut uts) == 0).then(|| CStr::from_ptr(uts.sysname.as_ptr()).to_bytes().to_vec())
+    }
+}
+
+/// `execv(path, argv)`: only returns on failure.
+pub fn execv(path: &[u8], argv: &[Vec<u8>]) -> Errno {
+    let p = to_cstring(path);
+    let args: Vec<_> = argv.iter().map(|a| to_cstring(a)).collect();
+    let mut ptrs: Vec<*const libc::c_char> = args.iter().map(|a| a.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    // SAFETY: valid C strings and a NULL-terminated array.
+    unsafe { libc::execv(p.as_ptr(), ptrs.as_ptr()) };
+    Errno::last()
+}
+
 /// `WIFEXITED(status) ? Some(WEXITSTATUS(status)) : None`.
 pub fn exit_status(status: i32) -> Option<i32> {
     libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status))
