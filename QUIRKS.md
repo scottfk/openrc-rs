@@ -119,6 +119,15 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `rc-depend` never prints `no dependency info for service`. Its check needs `rc_deptree_depends()` to return NULL, which it never does, so unknown services are passed on silently. | `applets/rc_depend.rs` |
 | low | When the deptree can't be stat'ed after regenerating it, the message reads `stat(/run/openrc): <error>/deptree`, with the error in the middle of the path. | `applets/shared.rs` (`rc_deptree_load_updating`) |
 
+## rc-update
+
+| Severity | Quirk | Where |
+|---|---|---|
+| low | `rc-update show X Y...` checks that `Y...` are runlevels but not `X`: `rc-update show nosuch` prints an (empty) `nosuch` column instead of an error. | `applets/rc_update.rs` |
+| low | `rc-update -u` updates the deptree and exits as soon as getopt reaches it, ignoring any command: `rc-update add foo -u` adds nothing. A failed update exits 255 (`return -1`). | `applets/rc_update.rs` |
+| low | `rc-update -s add` refuses `boot`, `single` and `shutdown` too, but the message always says `cannot stack the sysinit runlevel`. | `applets/rc_update.rs` |
+| low | When the runlevel comes from `softlevel` or the default and doesn't exist, `rc-update add`/`del` print `runlevel ... does not exist` but `add` still exits 0 (`del` exits 1 via its "not found in any of the specified runlevels" warning). | `applets/rc_update.rs` |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -152,6 +161,9 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **`service_started_daemon EXEC [INDEX]` with `RC_SVCNAME` unset:** C
   passes a NULL service to `basename_c()` and crashes; we exit 1 ("not
   started").
+- **`rc-update -u` when the deptree can't be opened for writing (EACCES):**
+  C returns an uninitialised variable (0 in practice, on the builds tried);
+  we return 0.
 - **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
   we return NULL. (A NULL *value* inside a list still crashes in
   `strcmp()`, as in C.)

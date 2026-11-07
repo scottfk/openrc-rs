@@ -5,6 +5,7 @@
 # 20261106 - Add deptree commands: regenerate and print the cache, rc-depend queries - Claude - scottfk
 # 20261107 - Add rc-depend option cases and mark_service_* round trips - Claude - scottfk
 # 20261107 - Add rc-service options and service_* state queries - Claude - scottfk
+# 20261107 - Add rc-update show/add/del/stack round trips - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -67,3 +68,11 @@ run 'rc-service -Z local restart'
 run 'FOO=bar LC_ALL=C rc-service -d local status'
 run 'for s in started stopped starting inactive crashed; do /usr/libexec/rc/bin/service_$s sshd; echo "$s=$?"; done'
 run 'RC_SVCNAME=sshd /usr/libexec/rc/bin/service_started; echo $?; /usr/libexec/rc/bin/service_started_daemon sshd /usr/sbin/sshd; echo d=$?; /usr/libexec/rc/bin/service_started_daemon sshd /usr/sbin/sshd 1; echo d1=$?'
+run rc-update
+run 'rc-update -v show'
+run 'rc-update show default boot; rc-update show nosuch; echo s=$?'
+run 'rc-update add sshd default; echo a=$?; rc-update add nosuch; echo a=$?; rc-update add local; echo a=$?'
+run 'rc-update add sshd boot nonetwork; echo a=$?; rc-update show nonetwork; rc-update del sshd boot nonetwork; echo d=$?; rc-update del sshd nonetwork; echo d=$?'
+run 'rc-update -a del nosuch; echo d=$?; rc-update -a add sshd; echo a=$?'
+run 'rc-update -s add nonetwork default; readlink /etc/runlevels/default/nonetwork; rc-update -s del nonetwork default; echo s=$?; rc-update -s add boot; echo s=$?'
+run 'rc-update -u; echo u=$?'

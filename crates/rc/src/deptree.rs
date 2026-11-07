@@ -27,8 +27,7 @@ pub mod options {
 }
 use options::{START, STOP, STRICT, TRACE};
 
-const RC_LEVEL_SYSINIT: &[u8] = b"sysinit";
-const RC_LEVEL_SHUTDOWN: &[u8] = b"shutdown";
+use crate::state::{RC_LEVEL_SHUTDOWN, RC_LEVEL_SYSINIT};
 
 /// One dependency type of a service (`RC_DEPTYPE`): `ineed`, `iuse`, ...
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
