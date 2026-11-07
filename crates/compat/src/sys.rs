@@ -488,6 +488,19 @@ pub fn waitpid(pid: i32, flags: i32) -> Result<(i32, i32), Errno> {
     if r < 0 { Err(Errno::last()) } else { Ok((r, status)) }
 }
 
+/// `ctime(&t)`: `"Wed Jun 30 21:49:08 1993\n"` in local time; empty if
+/// the year doesn't fit (C returns NULL there).
+pub fn ctime(t: i64) -> Vec<u8> {
+    let mut buf = [0 as libc::c_char; 32];
+    // SAFETY: ctime_r needs at least 26 bytes.
+    let p = unsafe { libc::ctime_r(&t, buf.as_mut_ptr()) };
+    if p.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: ctime_r wrote a C string into buf.
+    unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_bytes().to_vec()
+}
+
 /// `WIFEXITED(status) ? Some(WEXITSTATUS(status)) : None`.
 pub fn exit_status(status: i32) -> Option<i32> {
     libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status))
@@ -691,6 +704,15 @@ pub mod at {
         let p = to_cstring(path);
         // SAFETY: valid C string.
         cvt(unsafe { libc::unlinkat(dirfd, p.as_ptr(), flags) }).map(drop)
+    }
+
+    /// `utimensat(dirfd, path, {{sec, 0}, {sec, 0}}, flags)`: set both
+    /// times to `sec` seconds exactly.
+    pub fn utimensat(dirfd: i32, path: &[u8], sec: i64, flags: i32) -> Result<(), Errno> {
+        let p = to_cstring(path);
+        let ts = [libc::timespec { tv_sec: sec, tv_nsec: 0 }; 2];
+        // SAFETY: valid C string and two timespecs.
+        cvt(unsafe { libc::utimensat(dirfd, p.as_ptr(), ts.as_ptr(), flags) }).map(drop)
     }
 
     pub fn symlinkat(target: &[u8], dirfd: i32, path: &[u8]) -> Result<(), Errno> {

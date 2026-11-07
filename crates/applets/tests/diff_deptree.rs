@@ -531,3 +531,137 @@ fn rc_depend() {
     cases.push(prog(&["-a", "web"]).env("RC_SVCNAME", "web"));
     common::check_all("deptree-rc-depend", &cases);
 }
+
+/// The hand-made cache as `deptree`, dated in the future so it counts as
+/// fresh: rc-depend loads it without regenerating.
+fn dep_system_cached(r: &Path) {
+    dep_system(r);
+    let run = r.join("run");
+    fs::copy(run.join("handmade"), run.join("deptree")).unwrap();
+    let f = fs::File::options().write(true).open(run.join("deptree")).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(100_000)).unwrap();
+}
+
+/// An init script dated in the future: the regenerated cache is older
+/// than it, so `_rc_deptree_load()` reports clock skew and moves the
+/// cache's mtime forward to match.
+fn dep_system_skew(r: &Path) {
+    dep_system(r);
+    let f = fs::File::options().write(true).open(r.join("init.d/dns")).unwrap();
+    // A fixed time, so ctime() prints the same in every run.
+    f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_102_444_800)).unwrap();
+}
+
+/// No current runlevel (`softlevel`): rc-depend falls back to
+/// `rc_default_runlevel`, then to `default`.
+fn dep_system_nolevel(r: &Path) {
+    dep_system(r);
+    fs::remove_file(r.join("run/softlevel")).unwrap();
+}
+
+fn dep_system_conflevel(r: &Path) {
+    dep_system_with(r, "rc_logger=\"NO\"\nrc_default_runlevel=\"boot\"\n");
+    fs::remove_file(r.join("run/softlevel")).unwrap();
+}
+
+/// `softlevel` (default) wins over `rc_default_runlevel` (boot).
+fn dep_system_bothlevels(r: &Path) {
+    dep_system_with(r, "rc_default_runlevel=\"boot\"\n");
+}
+
+/// An empty `softlevel` counts as none.
+fn dep_system_emptylevel(r: &Path) {
+    dep_system_with(r, "rc_default_runlevel=\"boot\"\n");
+    fs::write(r.join("run/softlevel"), "\n").unwrap();
+}
+
+/// Our rc-depend vs the C one (Phase 3).
+#[test]
+fn rc_depend_port() {
+    if common::reference_dir().is_none() {
+        return;
+    }
+    let with =
+        |setup: fn(&Path), args: &[&str]| Case::new("rc-depend", args).sandbox(setup).ns(dep_ns()).env("TERM", "dumb");
+    let prog = |args: &[&str]| with(dep_system, args);
+    let mut cases = Vec::new();
+    for args in [
+        &[][..],
+        &["-u"],
+        &["-u", "app"],
+        &["--update"],
+        &["app"],
+        &["web", "mailer"],
+        &["-t", "ineed,iuse,iafter", "app"],
+        &["--type=needsme", "net"],
+        &["-t", "", "app"],
+        &["-t", "ineed,,iuse", "app"],
+        &["-t", "ineed", "-t", "iuse", "app"],
+        &["-t", "bogus", "app"],
+        &["-t", "ibefore", "clock"],
+        &["-t", "iafter", "local"],
+        &["-t", "iprovide,providedby", "net", "dns", "logger"],
+        &["-a", "web"],
+        &["--starting", "web"],
+        &["-o", "net"],
+        &["--stopping", "logger"],
+        &["-s", "app"],
+        &["--strict", "app"],
+        &["-T", "app"],
+        &["--notrace", "app"],
+        // -T after -a/-s keeps only tracing; before them it's a no-op.
+        &["-a", "-s", "-T", "net.eth0"],
+        &["-T", "-a", "-s", "net.eth0"],
+        &["-a", "-o", "web"],
+        &["-a", "-s", "net.eth0"],
+        &["nosuch"],
+        &["nosuch", "app"],
+        &["app", "nosuch", "app"],
+        &["-F", "/run/openrc/handmade", "a"],
+        &["--deptree-file", "/run/openrc/handmade", "a", "b"],
+        &["-F", "/run/openrc/handmade", "-F", "/run/openrc/nosuch", "a"],
+        &["-F", "/run/openrc/nosuch", "a"],
+        &["-F", "/run/openrc/nosuch"],
+        &["-u", "-F", "/run/openrc/handmade"],
+        &["loopa"],
+        &["selfdep", "missing"],
+        &["--", "-a", "app"],
+        &["app", "-a"],
+        &["-x", "app"],
+        &["--bogus", "app"],
+        &["-t"],
+        &["-h"],
+        &["--help"],
+        &["-V"],
+        &["-V", "app"],
+        &["-q", "nosuch"],
+        &["-q", "-q"],
+        &["-v", "app"],
+        &["-C", "app"],
+        &["-U", "app"],
+    ] {
+        cases.push(prog(args));
+    }
+    cases.extend([
+        prog(&["app"]).env("RC_BOOTLEVEL", "default"),
+        prog(&["-a", "web"]).env("RC_SVCNAME", "web"),
+        prog(&["-s", "app"]).env("RC_RUNLEVEL", "boot"),
+        prog(&["-s", "app"]).env("RC_RUNLEVEL", ""),
+        prog(&["-s", "-a", "net.eth0"]).env("RC_RUNLEVEL", "nosuch"),
+        prog(&["app"]).env("TERM", "xterm"),
+        prog(&["app"]).env("EINFO_QUIET", "yes"),
+        prog(&["app"]).env("EERROR_QUIET", "yes"),
+        with(dep_system_lxc, &["-t", "ineed,iuse,iafter,ibefore", "app", "devfs", "sysfs"]),
+        with(dep_system_cached, &["a"]),
+        with(dep_system_cached, &["-t", "ineed,iuse", "a", "b", "q", "last"]),
+        with(dep_system_cached, &["-u", "a"]),
+        with(dep_system_skew, &["app"]),
+        with(dep_system_skew, &["-u"]),
+        with(dep_system_nolevel, &["-s", "app"]),
+        with(dep_system_conflevel, &["-s", "app"]),
+        with(dep_system_conflevel, &["-s", "app"]).env("RC_RUNLEVEL", "default"),
+        with(dep_system_emptylevel, &["-s", "app"]),
+        with(dep_system_bothlevels, &["-s", "app"]),
+    ]);
+    common::check_all("rc-depend", &cases);
+}

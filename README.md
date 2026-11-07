@@ -85,7 +85,11 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] dependency tree (`librc-depend.c`): cache generation, loading, staleness, `depends` and `order`
    - [x] string lists and `rc_config_value()`: `librc.so.1` is all Rust, upstream's C deleted
    - [x] VM: boot C OpenRC on the all-Rust `librc.so.1`
-3. **Query and admin tools:** `rc-status`, `rc-update`, `rc-service`, `rc-depend`, `service`, `mark_service_*`.
+3. **Query and admin tools.** One branch per step:
+   - [x] `rc-depend`, `mark_service_*`
+   - [ ] `rc-service`, `service`
+   - [ ] `rc-update`
+   - [ ] `rc-status`
 4. **`openrc-run`**
 5. **`openrc`**, the runlevel engine.
 6. **`start-stop-daemon`, `supervise-daemon`**
