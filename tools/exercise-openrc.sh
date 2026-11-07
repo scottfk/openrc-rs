@@ -2,6 +2,7 @@
 # exercise-openrc.sh - run real OpenRC commands on a pty; diff the output with C vs openrc-rs swapped in
 # 20261106 - Created by Claude (claude.ai, Anthropic) - scottfk
 # 20261106 - Add mountinfo/fstabinfo/seedrng/netmount/value-applet commands - Claude - scottfk
+# 20261106 - Add deptree commands: regenerate and print the cache, rc-depend queries - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -40,3 +41,11 @@ run 'RC_SVCNAME=sshd /usr/libexec/rc/bin/service_get_value nosuch'
 run 'RC_SVCNAME=exercise /usr/libexec/rc/bin/service_set_value k v && RC_SVCNAME=exercise /usr/libexec/rc/bin/service_get_value k'
 run '/usr/libexec/rc/bin/is_newer_than /etc/fstab /etc/conf.d; echo newer=$?'
 run '/usr/libexec/rc/bin/shell_var net.eth0 foo-bar'
+run '/usr/libexec/rc/bin/rc-depend -u && cat /run/openrc/deptree /run/openrc/depconfig'
+run 'touch /etc/conf.d/local && rc-status default'
+run /usr/libexec/rc/bin/rc-depend sshd
+run /usr/libexec/rc/bin/rc-depend -t ineed,iuse,iwant,iafter sshd netmount local
+run /usr/libexec/rc/bin/rc-depend -t needsme,usesme localmount
+run /usr/libexec/rc/bin/rc-depend -a -s sshd
+run /usr/libexec/rc/bin/rc-depend -o net
+run /usr/libexec/rc/bin/rc-depend -t ibefore,iprovide,providedby net logger localmount

@@ -82,7 +82,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] C ABI layer: hybrid `librc.so.1`; C OpenRC's programs as differential tests (`diff_librc.rs`)
    - [x] runlevels and service state
    - [x] daemons (`librc-daemon.c`)
-   - [ ] dependency tree
+   - [x] dependency tree (`librc-depend.c`): cache generation, loading, staleness, `depends` and `order`
    - [ ] VM: boot C OpenRC on our `librc.so.1`
 3. **Query and admin tools:** `rc-status`, `rc-update`, `rc-service`, `rc-depend`, `service`, `mark_service_*`.
 4. **`openrc-run`**

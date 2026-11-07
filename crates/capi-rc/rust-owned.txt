@@ -58,3 +58,12 @@ rc_find_pids
 rc_service_daemon_set
 rc_service_started_daemon
 rc_service_daemons_crashed
+# Phase 2 step 4: the deptree
+rc_deptree_load
+rc_deptree_load_file
+rc_deptree_free
+rc_deptree_depend
+rc_deptree_depends
+rc_deptree_order
+rc_deptree_update_needed
+rc_deptree_update

@@ -695,3 +695,159 @@ pub unsafe extern "C" fn rc_service_daemons_crashed(service: *const c_char) -> b
     // SAFETY: C string from the caller.
     unsafe { arg(service) }.is_some_and(rc::daemon::rc_service_daemons_crashed)
 }
+
+// --- librc-depend.c: the dependency tree -------------------------------------
+
+/// The items of a C `RC_STRINGLIST` (NULL gives none).
+///
+/// # Safety
+/// `list` must be null or a valid `RC_STRINGLIST *`.
+unsafe fn read_stringlist(list: *const c_void) -> Vec<Vec<u8>> {
+    #[repr(C)]
+    struct RcString {
+        value: *const c_char,
+        next: *const RcString,
+        prev: *const *const RcString,
+    }
+    let mut out = Vec::new();
+    if list.is_null() {
+        return out;
+    }
+    // SAFETY: a TAILQ_HEAD starts with tqh_first; each node is an
+    // RC_STRING with a valid C string, per the caller.
+    unsafe {
+        let mut s = *list.cast::<*const RcString>();
+        while !s.is_null() {
+            out.push(CStr::from_ptr((*s).value).to_bytes().to_vec());
+            s = (*s).next;
+        }
+    }
+    out
+}
+
+/// Our `RC_DEPTREE *` (opaque to callers: rc.h declares it `void *`).
+fn deptree_ptr(t: Option<rc::deptree::DepTree>) -> *mut c_void {
+    t.map_or(std::ptr::null_mut(), |t| Box::into_raw(Box::new(t)).cast())
+}
+
+/// # Safety
+/// `p` must be null or from [`deptree_ptr`], not yet freed.
+unsafe fn deptree_ref<'a>(p: *const c_void) -> Option<&'a rc::deptree::DepTree> {
+    // SAFETY: per the caller.
+    unsafe { p.cast::<rc::deptree::DepTree>().as_ref() }
+}
+
+static EMPTY_TREE: rc::deptree::DepTree = rc::deptree::DepTree { infos: Vec::new() };
+
+/// `RC_DEPTREE *rc_deptree_load(void)`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_deptree_load() -> *mut c_void {
+    deptree_ptr(rc::deptree::rc_deptree_load())
+}
+
+/// `RC_DEPTREE *rc_deptree_load_file(const char *)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_load_file(file: *const c_char) -> *mut c_void {
+    // SAFETY: C string from the caller.
+    match unsafe { arg(file) } {
+        Some(f) => deptree_ptr(rc::deptree::rc_deptree_load_file(f)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// `void rc_deptree_free(RC_DEPTREE *)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_free(deptree: *mut c_void) {
+    if !deptree.is_null() {
+        // SAFETY: from rc_deptree_load*, and freed once, per the API.
+        drop(unsafe { Box::from_raw(deptree.cast::<rc::deptree::DepTree>()) });
+    }
+}
+
+/// `RC_STRINGLIST *rc_deptree_depend(const RC_DEPTREE *, const char *service,
+///  const char *type)`: never NULL; errno ENOENT if there's no such list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_depend(
+    deptree: *const c_void,
+    service: *const c_char,
+    ty: *const c_char,
+) -> *mut c_void {
+    // SAFETY: tree pointer and C strings from the caller.
+    let (t, s, ty) = unsafe { (deptree_ref(deptree), arg(service), arg(ty)) };
+    let r = match (t, s, ty) {
+        (Some(t), Some(s), Some(ty)) => rc::deptree::rc_deptree_depend(t, s, ty),
+        _ => Err(libc::ENOENT),
+    };
+    match r {
+        Ok(list) => stringlist(&list),
+        Err(e) => {
+            set_errno(e);
+            stringlist(&[])
+        }
+    }
+}
+
+/// `RC_STRINGLIST *rc_deptree_depends(const RC_DEPTREE *, const RC_STRINGLIST
+///  *types, const RC_STRINGLIST *services, const char *runlevel, int options)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_depends(
+    deptree: *const c_void,
+    types: *const c_void,
+    services: *const c_void,
+    runlevel: *const c_char,
+    options: c_int,
+) -> *mut c_void {
+    // SAFETY: pointers from the caller, per the API.
+    let (t, ty, svcs, rl) = unsafe {
+        (
+            deptree_ref(deptree).unwrap_or(&EMPTY_TREE),
+            (!types.is_null()).then(|| read_stringlist(types)),
+            read_stringlist(services),
+            arg(runlevel),
+        )
+    };
+    stringlist(&rc::deptree::rc_deptree_depends(t, ty.as_deref(), &svcs, rl, options).0)
+}
+
+/// `RC_STRINGLIST *rc_deptree_order(const RC_DEPTREE *, const char *runlevel,
+///  int options)`.  Deviation: a NULL runlevel (a crash in C) gives an
+/// empty list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_order(
+    deptree: *const c_void,
+    runlevel: *const c_char,
+    options: c_int,
+) -> *mut c_void {
+    // SAFETY: pointers from the caller, per the API.
+    let (t, rl) = unsafe { (deptree_ref(deptree).unwrap_or(&EMPTY_TREE), arg(runlevel)) };
+    match rl {
+        Some(rl) => stringlist(&rc::deptree::rc_deptree_order(t, rl, options)),
+        None => stringlist(&[]),
+    }
+}
+
+/// `bool rc_deptree_update_needed(time_t *newest, char *file)`: `file`,
+/// if given, needs room for PATH_MAX bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rc_deptree_update_needed(newest: *mut libc::time_t, file: *mut c_char) -> bool {
+    let r = rc::deptree::rc_deptree_update_needed();
+    // SAFETY: out-pointers per the API.
+    unsafe {
+        if let (false, Some(f)) = (file.is_null(), &r.file) {
+            // strlcpy(file, target, PATH_MAX)
+            let n = f.len().min(libc::PATH_MAX as usize - 1);
+            std::ptr::copy_nonoverlapping(f.as_ptr(), file.cast::<u8>(), n);
+            *file.add(n) = 0;
+        }
+        if r.needed && !newest.is_null() {
+            *newest = r.newest;
+        }
+    }
+    r.needed
+}
+
+/// `bool rc_deptree_update(void)`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rc_deptree_update() -> bool {
+    rc::deptree::rc_deptree_update()
+}

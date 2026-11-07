@@ -78,6 +78,15 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | On an OpenVZ host, once one container process is seen, `rc_find_pids()` skips every later process too (its flag is never reset). | `rc/daemon.rs` |
 | low | `rc_service_daemons_crashed()` gives up on the rest of the service's records if one can't be opened. Whether a crash then counts depends on errno being EACCES afterwards, which can be left over from any failed call, such as another user's /proc entry. | `rc/daemon.rs` |
 
+## librc: dependency tree (`librc-depend.c`)
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `rc_deptree_update_needed()` reads `depconfig` with `config_list()`, which keeps only lines containing `=`. The files that scripts declare with `config` are plain paths, so changing them never triggers a deptree update (unless the path happens to contain `=`). | `rc/deptree.rs` (`rc_deptree_update_needed`) |
+| low | Dependency lists keep duplicates: `need a a` records `a` twice, and a later `need !a` removes only one copy. | `rc/deptree.rs` (`parse_gendepends`) |
+| low | On a container system (`rc_sys`), a service with both `-<sys>` and `no<sys>` keywords (or one of them twice) is removed twice. The second pass deletes a second copy of its name, and of what it provides, from every other service's lists. | `rc/deptree.rs` (`remove_nosys`) |
+| low | The cache loader starts a new list whenever a type's lines aren't contiguous, and lookups return the first, so `rc_deptree_depend()` misses the later entries. The cache OpenRC writes is always contiguous; this only affects hand-edited files. | `rc/deptree.rs` (`parse`) |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |
@@ -109,6 +118,11 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   `rc_getfile()` when a read fails, and `rc_service_getenv()` when the
   value can't be opened after the buffer was resized (there C leaves the
   old pointer).
+- **A NULL runlevel in `rc_deptree_depends()` with `RC_DEP_TRACE`**, or in
+  `rc_deptree_order()`: C calls `strcmp()` on it and crashes once it has to
+  pick between providers. We treat it as a runlevel named `(null)` (as
+  glibc's `%s` formats it in the runlevel path), and `rc_deptree_order()`
+  returns an empty list. C's own callers always pass a runlevel.
 - **`rc_service_add()` for a service that can't be resolved**, in a
   runlevel other than `boot`: C dereferences NULL and crashes. We fail with
   ENOENT. C's own callers check `rc_service_exists()` first.
