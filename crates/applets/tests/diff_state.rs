@@ -257,3 +257,46 @@ fn mark_service() {
     }
     common::check_all("state-mark", &cases);
 }
+
+/// Our mark_service_* vs the C ones (Phase 3).
+#[test]
+fn mark_service_port() {
+    if common::reference_dir().is_none() {
+        return;
+    }
+    let m = |applet: &'static str, args: &[&str]| Case::new(applet, args).sandbox(system).ns(system_ns());
+    let mut cases = Vec::new();
+    for st in
+        ["started", "starting", "stopping", "stopped", "inactive", "wasinactive", "hotplugged", "failed", "crashed"]
+    {
+        let applet: &'static str = Box::leak(format!("mark_service_{st}").into_boxed_str());
+        cases.push(m(applet, &["alpha"]));
+        cases.push(m(applet, &["delta"]));
+        cases.push(m(applet, &["/etc/init.d/gamma"]));
+        cases.push(m(applet, &[]).env("RC_SVCNAME", "gamma"));
+        cases.push(m(applet, &[]));
+        cases.push(m(applet, &[""]).env("RC_SVCNAME", "gamma"));
+        cases.push(m(applet, &["nosuch"]));
+        cases.push(m(applet, &["alpha", "extra"]));
+    }
+    // Telling the parent openrc-run: only when marking $RC_SVCNAME itself.
+    // In a PID namespace, PID 1 is the marking program, which ignores the
+    // signal; PID 999 doesn't exist there.
+    let sig = |args: &[&str], svc: &str, pid: &str| {
+        let mut c = m("mark_service_started", args).env("RC_SVCNAME", svc).env("RC_OPENRC_PID", pid);
+        c = c.pidns("");
+        c
+    };
+    cases.extend([
+        sig(&[], "alpha", "1"),
+        sig(&[], "alpha", "999"),
+        sig(&["alpha"], "alpha", "999"),
+        sig(&["beta"], "alpha", "999"),
+        sig(&[], "alpha", " 999junk"),
+        sig(&[], "alpha", "junk"),
+        sig(&[], "alpha", ""),
+        sig(&[], "nosuch", "999"),
+        m("mark_service_stopped", &[]).env("RC_SVCNAME", "alpha").env("RC_OPENRC_PID", "999").pidns(""),
+    ]);
+    common::check_all("mark-service", &cases);
+}

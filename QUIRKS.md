@@ -103,6 +103,14 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A value starting with `$` becomes the *key*: `a=$b` gives `a=a`, and `export a=$b` gives `a=export a`. | `rc/conf.rs` |
 | low | `rc_sys()` uppercases the cached `rc_sys` value in place, so later `rc_conf_value("rc_sys")` calls see it uppercased. | `rc/sys.rs` |
 
+## rc-depend, mark_service_*
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `rc-depend -T` (`--notrace`) does `options &= RC_DEP_TRACE` instead of `&= ~RC_DEP_TRACE`. Tracing stays on, and any `-a`, `-o` or `-s` given *before* `-T` is cancelled. | `applets/rc_depend.rs` |
+| low | `rc-depend` never prints `no dependency info for service`. Its check needs `rc_deptree_depends()` to return NULL, which it never does, so unknown services are passed on silently. | `applets/rc_depend.rs` |
+| low | When the deptree can't be stat'ed after regenerating it, the message reads `stat(/run/openrc): <error>/deptree`, with the error in the middle of the path. | `applets/shared.rs` (`rc_deptree_load_updating`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.

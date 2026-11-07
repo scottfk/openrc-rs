@@ -1,5 +1,6 @@
 //! Port of upstream's `src/shared/` helpers used by several programs:
-//! the common options and usage text (`_usage.c`), and `parse_mode`.
+//! the common options and usage text (`_usage.c`), `parse_mode`, and the
+//! `misc.c` helpers `default_runlevel()` and `_rc_deptree_load()`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -139,6 +140,79 @@ pub fn show_version(applet: &[u8]) -> ! {
     out.push(b'\n');
     stdio::out(&out);
     stdio::exit(0)
+}
+
+/// `default_runlevel()`: the current runlevel, else `rc_default_runlevel`
+/// from rc.conf, else `default`.
+pub fn default_runlevel() -> Vec<u8> {
+    let runlevel = rc::state::rc_runlevel_get().or_else(|| rc::conf::rc_conf_value("rc_default_runlevel"));
+    match runlevel {
+        Some(r) if !r.is_empty() => r,
+        _ => b"default".to_vec(),
+    }
+}
+
+/// `_rc_deptree_load(force, regen)`: regenerate the dependency cache if
+/// it is stale (or `force` is set) and we may write it, then load it.
+/// `regen` is set to 1 when it was regenerated (with `force == -1`, to the
+/// update's result: 0 or -1).
+pub fn rc_deptree_load_updating(force: i32, regen: Option<&mut i32>) -> Option<rc::deptree::DepTree> {
+    use openrc_compat::sys::{self, at, libc};
+    use openrc_einfo::{ebegin, eend, eerror, eerrorn};
+    use rc::svcdir::{RcDir, rc_dirfd_raw, rc_svcdir};
+
+    let un = rc::deptree::rc_deptree_update_needed();
+    if un.needed || force != 0 {
+        // C's `t` is only written when an update is needed.
+        let t = if un.needed { un.newest } else { 0 };
+        let svcdirfd = rc_dirfd_raw(RcDir::Svcdir);
+
+        // Test if we have permission to update the deptree.
+        if let Err(e) = at::openat(svcdirfd, b"deptree", libc::O_WRONLY, 0)
+            && e.0 == libc::EACCES
+        {
+            return rc::deptree::rc_deptree_load();
+        }
+
+        let mut regen = regen;
+        if let Some(r) = regen.as_deref_mut() {
+            *r = 1;
+        }
+        ebegin(Some(b"Caching service dependencies"));
+        let retval = if rc::deptree::rc_deptree_update() { 0 } else { -1 };
+        eend(retval, Some(b"Failed to update the dependency tree"));
+
+        if retval == 0 {
+            let st = match at::fstatat(svcdirfd, b"deptree", 0) {
+                Ok(st) => st,
+                Err(e) => {
+                    // QUIRK: the format puts the path after the error.
+                    eerror(Some(&bcat!("stat(", rc_svcdir(), "): ", e.strerror(), "/deptree")));
+                    return None;
+                }
+            };
+            if st.mtime >= t {
+                let _ = at::unlinkat(svcdirfd, b"clock-skewed", 0);
+            } else {
+                let file = un.file.unwrap_or_default();
+                eerror(Some(&bcat!("Clock skew detected with '", file, "'")));
+                eerrorn(Some(&bcat!("Adjusting mtime of '", rc_svcdir(), "/deptree' to ", sys::ctime(t))));
+                let _ = at::utimensat(svcdirfd, b"deptree", t, 0);
+                if let Ok(fd) =
+                    at::openat(svcdirfd, b"clock-skewed", libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o666)
+                {
+                    use std::io::Write;
+                    let _ = std::fs::File::from(fd).write_all(&bcat!(file, "\n"));
+                }
+            }
+        }
+        if force == -1
+            && let Some(r) = regen
+        {
+            *r = retval;
+        }
+    }
+    rc::deptree::rc_deptree_load()
 }
 
 /// `parse_mode()`: only numeric (octal) modes are supported.

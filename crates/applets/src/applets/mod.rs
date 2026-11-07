@@ -4,8 +4,10 @@ pub mod checkpath;
 pub mod einfo;
 pub mod fstabinfo;
 pub mod kill_all;
+pub mod mark_service;
 pub mod mountinfo;
 pub mod newer;
+pub mod rc_depend;
 pub mod seedrng;
 pub mod shell_var;
 pub mod swclock;
@@ -86,6 +88,7 @@ pub const APPLETS: &[Applet] = &[
     rc_bin("is_newer_than", newer::is_newer_than),
     rc_bin("kill_all", kill_all::main),
     rc_bin("is_older_than", newer::is_older_than),
+    rc_bin("rc-depend", rc_depend::main),
     rc_bin("shell_var", shell_var::main),
     // src/value/meson.build value_execs:
     rc_bin("service_get_value", value::main),
@@ -93,6 +96,16 @@ pub const APPLETS: &[Applet] = &[
     rc_bin("service_export", value::main),
     rc_bin("get_options", value::main),
     rc_bin("save_options", value::main),
+    // src/mark_service/meson.build mark_service_execs:
+    rc_sbin("mark_service_starting", mark_service::main),
+    rc_sbin("mark_service_started", mark_service::main),
+    rc_sbin("mark_service_stopping", mark_service::main),
+    rc_sbin("mark_service_stopped", mark_service::main),
+    rc_sbin("mark_service_inactive", mark_service::main),
+    rc_sbin("mark_service_wasinactive", mark_service::main),
+    rc_sbin("mark_service_hotplugged", mark_service::main),
+    rc_sbin("mark_service_failed", mark_service::main),
+    rc_sbin("mark_service_crashed", mark_service::main),
     rc_sbin("seedrng", seedrng::main),
     rc_sbin("swclock", swclock::main),
 ];

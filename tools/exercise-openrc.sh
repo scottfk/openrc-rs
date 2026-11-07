@@ -3,6 +3,7 @@
 # 20261106 - Created by Claude (claude.ai, Anthropic) - scottfk
 # 20261106 - Add mountinfo/fstabinfo/seedrng/netmount/value-applet commands - Claude - scottfk
 # 20261106 - Add deptree commands: regenerate and print the cache, rc-depend queries - Claude - scottfk
+# 20261107 - Add rc-depend option cases and mark_service_* round trips - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -49,3 +50,10 @@ run /usr/libexec/rc/bin/rc-depend -t needsme,usesme localmount
 run /usr/libexec/rc/bin/rc-depend -a -s sshd
 run /usr/libexec/rc/bin/rc-depend -o net
 run /usr/libexec/rc/bin/rc-depend -t ibefore,iprovide,providedby net logger localmount
+run /usr/libexec/rc/bin/rc-depend -s -a -T sshd
+run /usr/libexec/rc/bin/rc-depend -t ineed,iuse,iwant,iafter,ibefore -o localmount
+run /usr/libexec/rc/bin/rc-depend --help
+run /usr/libexec/rc/bin/rc-depend nosuch
+run '/usr/libexec/rc/sbin/mark_service_inactive local; rc-status default; /usr/libexec/rc/sbin/mark_service_started local; rc-status default'
+run 'RC_SVCNAME=local /usr/libexec/rc/sbin/mark_service_failed; rc-status --crashed; rc-service local zap; rc-service local start'
+run /usr/libexec/rc/sbin/mark_service_started
