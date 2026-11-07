@@ -87,6 +87,13 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | On a container system (`rc_sys`), a service with both `-<sys>` and `no<sys>` keywords (or one of them twice) is removed twice. The second pass deletes a second copy of its name, and of what it provides, from every other service's lists. | `rc/deptree.rs` (`remove_nosys`) |
 | low | The cache loader starts a new list whenever a type's lines aren't contiguous, and lookups return the first, so `rc_deptree_depend()` misses the later entries. The cache OpenRC writes is always contiguous; this only affects hand-edited files. | `rc/deptree.rs` (`parse`) |
 
+## librc: string lists (`librc-stringlist.c`, `rc_config_value()`)
+
+| Severity | Quirk | Where |
+|---|---|---|
+| low | `rc_stringlist_delete()` sets errno to EEXIST, not ENOENT, when the value isn't on the list. | `capi-rc/stringlist.rs` |
+| low | `rc_config_value(list, entry)` returns the text after the line's *first* `=`, so an `entry` containing `=` gets the wrong part: `"a=b"` on the line `a=b=c` gives `b=c`. | `capi-rc/stringlist.rs` |
+
 ## librc (rc.conf parsing)
 
 | Severity | Quirk | Where |
@@ -126,6 +133,9 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **`rc_service_add()` for a service that can't be resolved**, in a
   runlevel other than `boot`: C dereferences NULL and crashes. We fail with
   ENOENT. C's own callers check `rc_service_exists()` first.
+- **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
+  we return NULL. (A NULL *value* inside a list still crashes in
+  `strcmp()`, as in C.)
 - **SELinux:** `checkpath` doesn't relabel yet (`TODO(selinux)`). Upstream
   only does this when built with `-Dselinux`.
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with

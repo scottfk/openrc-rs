@@ -24,6 +24,7 @@ Layout:
 | `crates/rc` | Port of librc (config, service state, dependency tree). |
 | `crates/applets` | The `openrc-rs` multi-call binary. The applet is chosen by `argv[0]`, BusyBox-style. |
 | `crates/capi-einfo` | A C ABI `libeinfo.so.1` built from the Rust code, with a small C shim for the variadic functions. |
+| `crates/capi-rc` | A C ABI `librc.so.1` built from the Rust code (no C). |
 
 ## What's useful to contribute
 
@@ -46,7 +47,7 @@ Layout:
 - **New dependencies** without a strong reason. The workspace depends only on `libc`, and
   I'd like to keep it that way. Things like argument parsing and number formatting are
   reimplemented in `compat` on purpose, because their exact C semantics leak into output.
-- **`unsafe` outside `crates/compat`** (and the FFI boundary in `crates/capi-einfo`). If you
+- **`unsafe` outside `crates/compat`** (and the FFI boundaries in `crates/capi-einfo` and `crates/capi-rc`). If you
   need a new syscall, add a safe wrapper in `compat::sys`.
 
 ## Building and testing

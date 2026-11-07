@@ -463,7 +463,7 @@ pub fn rc_probe() -> Option<PathBuf> {
                     .arg("-o")
                     .arg(&tmp)
                     .arg(root.join("tests/capi/rc-probe.c"))
-                    .arg(format!("-I{}", root.join("crates/capi-rc/upstream").display()))
+                    .arg(format!("-I{}", root.join("crates/capi-rc/include").display()))
                     .arg(format!("-L{}", libdir.display()))
                     .arg(format!("-Wl,-rpath,{}", libdir.display()))
                     .arg("-lrc")

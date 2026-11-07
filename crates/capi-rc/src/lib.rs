@@ -1,15 +1,12 @@
-//! C ABI for [`rc`]: the Rust half of a drop-in `librc.so.1`.
+//! C ABI for [`rc`]: a drop-in `librc.so.1`, all in Rust.
 //!
-//! `librc.so.1` is a hybrid while Phase 2 is in progress.  The functions
-//! listed in `rust-owned.txt` are defined here; the rest still come from
-//! upstream's C (`upstream/`), compiled with these symbols made weak so
-//! that the Rust definitions win, including for calls from inside the C.
-//! Each Phase 2 step moves more functions here.
+//! `make` links this static archive into `librc.so.1`, exporting exactly
+//! the symbols in `exports.txt` (upstream's 72).
 //!
 //! Memory handed to C callers is allocated with libc `malloc`, and lists
-//! are built with the library's own `rc_stringlist_*`, so callers can
-//! free and walk them as usual.  Strings that C returns from static or
-//! cached storage are leaked `CStr`s here, which live for the process.
+//! are the `queue(3)` TAILQs of [`stringlist`], so callers can free and
+//! walk them as usual.  Strings that C returns from static or cached
+//! storage are leaked `CStr`s here, which live for the process.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -20,10 +17,7 @@ use std::sync::Mutex;
 use openrc_compat::bytes::to_cstring;
 use rc::svcdir::RcDir;
 
-unsafe extern "C" {
-    fn rc_stringlist_new() -> *mut c_void;
-    fn rc_stringlist_add(list: *mut c_void, value: *const c_char) -> *mut c_void;
-}
+pub mod stringlist;
 
 fn set_errno(e: i32) {
     // SAFETY: errno is thread-local and always writable.
@@ -51,18 +45,9 @@ fn malloc_bytes(b: &[u8]) -> *mut c_char {
     }
 }
 
-/// An `RC_STRINGLIST *` built with the library's own list functions.
+/// An `RC_STRINGLIST *` of `items`.
 fn stringlist(items: &[Vec<u8>]) -> *mut c_void {
-    // SAFETY: rc_stringlist_new/add are the C functions linked into this
-    // library; add copies its argument.
-    unsafe {
-        let list = rc_stringlist_new();
-        for item in items {
-            let c = to_cstring(item);
-            rc_stringlist_add(list, c.as_ptr());
-        }
-        list
-    }
+    stringlist::from_items(items).cast()
 }
 
 /// A process-lifetime C string for `value`, reused for equal values (for
@@ -703,26 +688,8 @@ pub unsafe extern "C" fn rc_service_daemons_crashed(service: *const c_char) -> b
 /// # Safety
 /// `list` must be null or a valid `RC_STRINGLIST *`.
 unsafe fn read_stringlist(list: *const c_void) -> Vec<Vec<u8>> {
-    #[repr(C)]
-    struct RcString {
-        value: *const c_char,
-        next: *const RcString,
-        prev: *const *const RcString,
-    }
-    let mut out = Vec::new();
-    if list.is_null() {
-        return out;
-    }
-    // SAFETY: a TAILQ_HEAD starts with tqh_first; each node is an
-    // RC_STRING with a valid C string, per the caller.
-    unsafe {
-        let mut s = *list.cast::<*const RcString>();
-        while !s.is_null() {
-            out.push(CStr::from_ptr((*s).value).to_bytes().to_vec());
-            s = (*s).next;
-        }
-    }
-    out
+    // SAFETY: per the caller.
+    unsafe { stringlist::items(list.cast()) }
 }
 
 /// Our `RC_DEPTREE *` (opaque to callers: rc.h declares it `void *`).
