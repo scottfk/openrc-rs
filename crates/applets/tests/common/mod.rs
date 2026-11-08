@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 
+pub mod run;
 pub mod system;
 
 use std::ffi::OsString;

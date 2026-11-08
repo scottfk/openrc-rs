@@ -150,6 +150,8 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A plugin record without `=` (say `NAME\0`) crashes openrc-run: `strsep()` leaves its pointer NULL, which C then dereferences (SIGSEGV). | `plugin.rs` (`read_environ`) |
 | low | Plugin records are parsed from one buffer that is zeroed once and reused, so a short read can run on into bytes an earlier read left behind. | `plugin.rs` (`read_environ`) |
 | low | Dead check: when starting the services we use, failed ones are meant to be skipped "while the runlevel is starting", but that test sits inside a block that only runs when the runlevel *isn't* starting. | `applets/openrc_run.rs` (`svc_start_deps`) |
+| medium | An inactive service can't be stopped in the background (`IN_BACKGROUND=yes`): a misplaced parenthesis makes the check "refuse unless started and not inactive" rather than "refuse unless started or inactive", so openrc-run exits 1. | `applets/openrc_run.rs` (`svc_stop_check`) |
+| low | `pause` doesn't work. The handler that would warn it's deprecated and stop without dependencies is never reached, because `pause` isn't in the command table. It goes to `openrc-run.sh`, which fails with "command 'pause' not a default nor extra command". | `applets/openrc_run.rs` (`cmd_stop`) |
 
 # Known deviations from C
 

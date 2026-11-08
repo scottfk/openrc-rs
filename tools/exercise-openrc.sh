@@ -9,6 +9,7 @@
 # 20261107 - Add rc-status modes, formats and state filters - Claude - scottfk
 # 20261107 - Add openrc-run simple commands (ours when swapped in, though not installed yet) - Claude - scottfk
 # 20261107 - Add openrc-run start: dry runs, already started, and C-stop/our-start round trips - Claude - scottfk
+# 20261108 - Add openrc-run stop/restart/condrestart/pause; openrc-run is now installed, so call it directly - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -84,10 +85,7 @@ run 'rc-status -l; rc-status -r; rc-status -u; rc-status -m; rc-status -S'
 run 'rc-status -c; echo c=$?; rc-status nosuch; echo n=$?; rc-status nosuch boot; echo nb=$?'
 run 'rc-status -i started; rc-status -i stopped -i failed; rc-status -i bogus; echo i=$?'
 run 'rc-status -f json; echo f=$?; rc-status boot default nonetwork'
-# openrc-run isn't installed until its port is complete: when swapped in,
-# call ours through the multi-call binary.
 OR=/sbin/openrc-run
-[[ -x /usr/libexec/rc/openrc-rs ]] && OR="/usr/libexec/rc/openrc-rs openrc-run"
 export OR
 run '$OR /etc/init.d/sshd describe; $OR /etc/init.d/local describe'
 run '$OR /etc/init.d/sshd status; echo s=$?; $OR /etc/init.d/netmount status; $OR /etc/init.d/savecache status; echo s=$?'
@@ -96,9 +94,13 @@ run '$OR /etc/init.d/sshd -s status; echo s=$?; $OR /etc/init.d/sshd -S status; 
 run '$OR /etc/init.d/sshd checkconfig; echo c=$?; $OR /etc/init.d/sshd nosuchcmd; echo n=$?'
 run '$OR /etc/init.d/sshd; echo u=$?; $OR; echo d=$?'
 run '$OR /etc/init.d/local -v describe; $OR /etc/init.d/local -d status 2>&1 | grep -c .'
-# start: C stops (openrc-run isn't installed yet), ours starts again.
 run '$OR /etc/init.d/sshd start; echo s=$?; $OR /etc/init.d/local -Z start; $OR /etc/init.d/savecache --dry-run start'
 run 'IN_BACKGROUND=yes $OR /etc/init.d/local start; echo b=$?; $OR /etc/init.d/netmount ineed'
 run '/etc/init.d/local stop >/dev/null; $OR /etc/init.d/local start; echo l=$?; rc-service local status'
 run '/etc/init.d/netmount stop >/dev/null; $OR /etc/init.d/netmount start; echo n=$?; rc-service netmount status'
 run '/etc/init.d/local stop >/dev/null; $OR /etc/init.d/local --nodeps start start; echo d=$?; rc-service local status'
+run '$OR /etc/init.d/local -Z stop; $OR /etc/init.d/localmount -Z stop; $OR /etc/init.d/net.lo -Z restart; $OR /etc/init.d/sshd -Z condrestart'
+run '$OR /etc/init.d/local stop; echo s=$?; $OR /etc/init.d/local stop; echo s=$?; rc-service local status; $OR /etc/init.d/local start'
+run '$OR /etc/init.d/netmount restart; echo r=$?; rc-service netmount status; $OR /etc/init.d/local --nodeps restart; echo r=$?'
+run '$OR /etc/init.d/local condrestart; echo c=$?; $OR /etc/init.d/savecache condrestart; echo c=$?; $OR /etc/init.d/local pause; echo p=$?'
+run 'IN_BACKGROUND=yes $OR /etc/init.d/local stop; echo b=$?; rc-service local status; IN_BACKGROUND=yes $OR /etc/init.d/local stop; echo b=$?; $OR /etc/init.d/local zap start'
