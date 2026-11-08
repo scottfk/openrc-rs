@@ -30,9 +30,6 @@ pub enum InstallDir {
     Bin,
     /// `$sbindir`.
     Sbin,
-    /// Not installed yet: the port is incomplete.  Still reachable as
-    /// `openrc-rs <applet>` (and so by the tests); `$sbindir` once done.
-    Pending,
 }
 
 impl InstallDir {
@@ -42,7 +39,6 @@ impl InstallDir {
             InstallDir::RcSbin => "rc-sbin",
             InstallDir::Bin => "bin",
             InstallDir::Sbin => "sbin",
-            InstallDir::Pending => "pending",
         }
     }
 }
@@ -63,11 +59,6 @@ const fn rc_bin(name: &'static str, main: Main) -> Applet {
 
 const fn bin(name: &'static str, main: Main) -> Applet {
     Applet { name, dir: InstallDir::Bin, main }
-}
-
-/// An applet whose port isn't finished, so `make install` leaves it out.
-const fn pending(name: &'static str, main: Main) -> Applet {
-    Applet { name, dir: InstallDir::Pending, main }
 }
 
 const fn sbin(name: &'static str, main: Main) -> Applet {
@@ -142,9 +133,7 @@ pub const APPLETS: &[Applet] = &[
     sbin("rc-update", rc_update::main),
     bin("rc-status", rc_status::main),
     sbin("openrc-run", openrc_run::main),
-    // TODO(phase5-step2): sbin once the logger, sysinit and interactive
-    // boot are ported.
-    pending("openrc", openrc::main),
+    sbin("openrc", openrc::main),
     rc_sbin("swclock", swclock::main),
 ];
 

@@ -2,7 +2,8 @@
 //! `system()` services plus more, a fake `openrc-run.sh` (one line per
 //! call; `START_FAIL`/`STOP_FAIL`, `*_MARK` and `*_RUN` make a service's
 //! start or stop fail, mark itself, run a nested command, or `*_SIG`
-//! signal openrc's `$RC_PID`), the
+//! signal openrc's `$RC_PID`; `START_ESC`, `START_MKDIR`, `START_WINCH`
+//! and `START_STTY` are for openrc's logger and interactive tests), the
 //! plugin-dir-patched programs, a test plugin and a fast `alarm()`.
 //!
 //! See diff_openrc_run_start.rs for how dependencies and plugins are run.
@@ -27,6 +28,12 @@ start) fail=$START_FAIL mark=$START_MARK run=$START_RUN sig=$START_SIG ;;
 stop) fail=$STOP_FAIL mark=$STOP_MARK run=$STOP_RUN sig=$STOP_SIG ;;
 *) exit 0 ;;
 esac
+if [ "$2" = start ]; then
+	[ -n "$START_ESC" ] && printf '\033[1;32mgreen\033[0m\r\n\033]0;title\007x\tt\303\251\033(B!\033\n\033\r[1mY\033[1\0335q\177z\n'
+	[ -n "$START_MKDIR" ] && mkdir -p "$START_MKDIR"
+	[ -n "$START_WINCH" ] && { stty cols 50 <&2; kill -WINCH "$RC_PID"; sleep 0.3; echo "size: $(stty size <&2)"; }
+	[ -n "$START_STTY" ] && echo "tty: $(stty -a <&0 2>&1 | grep -o -- '-\?icanon\|-\?echo ' | tr '\n' ' ')"
+fi
 for s in $sig; do
 	case "$s" in "$RC_SVCNAME":*) kill -"${s#*:}" "$RC_PID"; sleep 0.2 ;; esac
 done

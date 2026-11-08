@@ -11,6 +11,7 @@
 # 20261107 - Add openrc-run start: dry runs, already started, and C-stop/our-start round trips - Claude - scottfk
 # 20261108 - Add openrc-run stop/restart/condrestart/pause; openrc-run is now installed, so call it directly - Claude - scottfk
 # 20261108 - Add openrc (ours through the multi-call binary when swapped in, as it isn't installed yet) - Claude - scottfk
+# 20261108 - openrc is installed now: call it directly; add an rc_logger run - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -105,13 +106,11 @@ run '$OR /etc/init.d/local stop; echo s=$?; $OR /etc/init.d/local stop; echo s=$
 run '$OR /etc/init.d/netmount restart; echo r=$?; rc-service netmount status; $OR /etc/init.d/local --nodeps restart; echo r=$?'
 run '$OR /etc/init.d/local condrestart; echo c=$?; $OR /etc/init.d/savecache condrestart; echo c=$?; $OR /etc/init.d/local pause; echo p=$?'
 run 'IN_BACKGROUND=yes $OR /etc/init.d/local stop; echo b=$?; rc-service local status; IN_BACKGROUND=yes $OR /etc/init.d/local stop; echo b=$?; $OR /etc/init.d/local zap start'
-# openrc isn't installed until its port is complete: when swapped in, call
-# ours through the multi-call binary.  (No real runlevel switches: those
-# would take the network down under us.)
+# (No real runlevel switches: those would take the network down under us.)
 RC=/sbin/openrc
-[[ -x /usr/libexec/rc/openrc-rs ]] && RC="/usr/libexec/rc/openrc-rs openrc"
 export RC
 run '$RC -S; echo s=$?; $RC --help | head -3; $RC nosuch; echo n=$?; $RC -s local status; $RC -o nosuch; echo o=$?'
 run '$RC; echo r=$?; $RC default; echo d=$?; rc-status -r'
 run '/etc/init.d/local stop >/dev/null; $RC -n default; echo n=$?; rc-service local status; /etc/init.d/local stop >/dev/null; $RC; rc-service local status'
 run 'RC_BOOTLEVEL=boot $RC -o default; echo o=$?; cat /run/openrc/krunlevel; echo; $RC; echo k=$?; ls /run/openrc/krunlevel 2>&1; rm -f /run/openrc/krunlevel'
+run 'cp /etc/rc.conf /tmp/rc.conf.ex; echo rc_logger=YES >> /etc/rc.conf; /etc/init.d/local stop >/dev/null; $RC; echo l=$?; cp /tmp/rc.conf.ex /etc/rc.conf; tail -n +2 /var/log/rc.log | tail -6 | sed "s/ at .*//"'
