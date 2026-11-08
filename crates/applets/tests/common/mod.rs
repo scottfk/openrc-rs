@@ -98,6 +98,11 @@ pub struct Case {
     pub env: Vec<(String, Vec<u8>)>,
     /// Run with stdin/stdout/stderr on a pseudo-terminal (output merged).
     pub pty: bool,
+    /// Keys typed on the pty before the program starts (the terminal
+    /// echoes them, so they lead the output).
+    pub input: Vec<u8>,
+    /// Sandbox files (relative paths) whose contents are compared too.
+    pub files: Vec<String>,
     /// Capture syslog messages on a private /dev/log (root only, and only
     /// when no syslog daemon owns /dev/log).
     pub syslog: bool,
@@ -141,6 +146,8 @@ impl Case {
             args: args.iter().map(|s| s.to_string()).collect(),
             env: Vec::new(),
             pty: false,
+            input: Vec::new(),
+            files: Vec::new(),
             syslog: false,
             setup: None,
             bins: None,
@@ -178,6 +185,17 @@ impl Case {
         self.pty = true;
         self
     }
+    /// Also compare the contents of this sandbox file (missing is "none").
+    pub fn file(mut self, rel: &str) -> Case {
+        self.files.push(rel.to_string());
+        self
+    }
+    /// On a pty, with `keys` already typed.
+    pub fn pty_input(mut self, keys: &[u8]) -> Case {
+        self.pty = true;
+        self.input = keys.to_vec();
+        self
+    }
     /// Compare two given programs (run as `argv[0] = applet`).
     pub fn programs(applet: &'static str, c: PathBuf, rust: PathBuf, args: &[&str]) -> Case {
         let mut case = Case::new(applet, args);
@@ -195,7 +213,11 @@ impl Case {
             if env.is_empty() { String::new() } else { env.join(" ") + " " },
             self.applet,
             self.args.join(" "),
-            if self.pty { "  [pty]" } else { "" }
+            if self.input.is_empty() {
+                if self.pty { "  [pty]".to_string() } else { String::new() }
+            } else {
+                format!("  [pty, typed {:?}]", String::from_utf8_lossy(&self.input))
+            }
         )
     }
 }
@@ -371,8 +393,8 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
 }
 
 /// Run on a pty: returns (merged output, status).
-fn run_pty(mut cmd: Command) -> (Vec<u8>, std::process::ExitStatus) {
-    use std::io::Read;
+fn run_pty(mut cmd: Command, input: &[u8]) -> (Vec<u8>, std::process::ExitStatus) {
+    use std::io::{Read, Write};
     use std::os::fd::{FromRawFd, OwnedFd};
     let (mut master, mut slave) = (0, 0);
     let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
@@ -381,13 +403,14 @@ fn run_pty(mut cmd: Command) -> (Vec<u8>, std::process::ExitStatus) {
     assert_eq!(r, 0, "openpty failed");
     // SAFETY: openpty returned these fds and nothing else owns them.
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+    let mut f = std::fs::File::from(master);
+    f.write_all(input).unwrap();
     cmd.stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
     let mut child = cmd.spawn().unwrap();
     drop(cmd); // closes our copies of the slave
     let mut out = Vec::new();
-    let mut f = std::fs::File::from(master);
     let mut buf = [0u8; 4096];
     loop {
         match f.read(&mut buf) {
@@ -412,14 +435,20 @@ fn run(bin: &Path, case: &Case, name: &str, ourlibs: bool) -> Outcome {
         cmd.env("LD_LIBRARY_PATH", our_libdir());
     }
     let (stdout, stderr, status) = if case.pty {
-        let (out, st) = run_pty(cmd);
+        let (out, st) = run_pty(cmd, &case.input);
         (out, Vec::new(), st)
     } else {
         let mut cmd = cmd;
         let o = cmd.stdin(Stdio::null()).output().unwrap();
         (o.stdout, o.stderr, o.status)
     };
-    let tree = root.as_deref().map(snapshot).unwrap_or_default();
+    let mut tree = root.as_deref().map(snapshot).unwrap_or_default();
+    if let Some(r) = root.as_deref() {
+        for f in &case.files {
+            let c = std::fs::read(r.join(f)).map(|b| format!("{:?}", String::from_utf8_lossy(&b)));
+            tree.push(format!("contents {f}: {}", c.unwrap_or_else(|_| "none".into())));
+        }
+    }
     let syslog = log.map(SyslogCapture::finish).unwrap_or_default();
     Outcome { stdout, stderr, status: status_string(status), tree, syslog }
 }

@@ -94,9 +94,9 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] groundwork and the simple commands: options, environment, running `openrc-run.sh` (with `rc_parallel` prefixing), `describe`/`help`/`status`/extra commands, dependency queries, `zap`
    - [x] `start`: dependencies, waiting, inactive/background/hotplug, scheduled services, plugins
    - [x] `stop`, `restart`, `condrestart`, `pause` (broken upstream; see QUIRKS.md); installed as `$sbindir/openrc-run`
-5. **`openrc`**, the runlevel engine. One branch per step; not installed until step 2 is done:
+5. **`openrc`**, the runlevel engine. One branch per step:
    - [x] runlevel changes: options (`-n`, `-o`, `-s`, `-S`), the krunlevel override, stopping what isn't wanted, starting the stacked runlevels, crashed daemons, plugins, signals, `rc_parallel`
-   - [ ] the `rc.log` logger, `sysinit` (banner, `init.sh`, kernel command line), interactive boot; installed as `$sbindir/openrc`
+   - [x] the `rc.log` logger, `sysinit` (banner, `init.sh`, kernel command line), interactive boot; installed as `$sbindir/openrc`
 6. **`start-stop-daemon`, `supervise-daemon`**
 7. **`openrc-init`, `openrc-shutdown`**, plus `halt`/`poweroff`/`reboot`/`shutdown`.
 

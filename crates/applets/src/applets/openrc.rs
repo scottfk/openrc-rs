@@ -2,22 +2,22 @@
 //! It stops the services that shouldn't run in the new runlevel, then
 //! starts those of each runlevel the new one stacks, in dependency order.
 //!
-//! Phase 5 step 1: everything but the `rc.log` logger (`rc_logger`), the
-//! `sysinit` runlevel's setup and interactive boot, which follow in the
-//! next step (and stop with "not ported yet" until then).  Until then the
-//! applet isn't installed.
+//! The `sysinit` runlevel first runs `init.sh` (and `init-early.sh`)
+//! after a banner; with `rc_interactive`, pressing I asks before each
+//! service is started.  The `rc.log` logger is in `rc_logger.rs`.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
 use openrc_compat::getopt::{Getopt, HasArg, LongOpt};
 use openrc_compat::{bcat, env, exec, stdio, sys};
-use openrc_einfo::{eerror, eerrorx, einfo, ewarn};
+use openrc_einfo::{EColor, ecolor, eerror, eerrorx, eindent, einfo, eoutdent, ewarn};
 use rc::deptree::{self, DepTree, options};
 use rc::state::{self, flags};
 use rc::svcdir::{RcDir, rc_dirfd_raw, rc_svcdir};
 
 use crate::plugin::{self, rc_plugin_run, rc_plugin_run_opt};
+use crate::rc_logger::{self, rc_logger_close, rc_logger_open};
 use crate::shared::{
     Usage, default_runlevel, env_config, env_filter, exec_service, getoptstring_common, rc_conf_yesno,
     rc_deptree_load_updating,
@@ -60,6 +60,14 @@ static APPLET: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static SERVICE_PIDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// Set once main has got as far as C's `atexit(cleanup)`.
 static CLEANUP: AtomicBool = AtomicBool::new(false);
+/// `termios_orig`: stdin's settings before the first `read_key()`.
+static TERMIOS_ORIG: Mutex<Option<sys::libc::termios>> = Mutex::new(None);
+/// The runlevel, for the hooks `run_program()` runs on failure.
+static RUNLEVEL: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+fn termios_orig() -> Option<sys::libc::termios> {
+    *TERMIOS_ORIG.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn applet() -> Vec<u8> {
     APPLET.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -104,15 +112,19 @@ fn clean_failed() {
 
 extern "C" fn cleanup() {
     use sys::libc;
-    if !plugin::rc_in_plugin() && CLEANUP.load(SeqCst) {
+    if !rc_logger::rc_in_logger() && !plugin::rc_in_plugin() && CLEANUP.load(SeqCst) {
         let a = applet();
         if a == b"rc" || a == b"openrc" {
             plugin::rc_plugin_unload();
+            if let Some(t) = termios_orig() {
+                sys::tcsetattr_now(0, &t);
+            }
             // Clean runlevel start, stop markers.
             let svcdir = rc_dirfd_raw(RcDir::Svcdir);
             let _ = sys::at::unlinkat(svcdir, b"rc.starting", libc::AT_REMOVEDIR);
             let _ = sys::at::unlinkat(svcdir, b"rc.stopping", libc::AT_REMOVEDIR);
             clean_failed();
+            rc_logger_close();
         }
     }
     stdio::flush();
@@ -143,8 +155,12 @@ extern "C" fn handle_signal(sig: i32) {
                 remove_pid(pid);
             }
         }
-        // Resizes the logger's pty (step 2); without the logger, nothing.
-        libc::SIGWINCH => {}
+        libc::SIGWINCH => {
+            let tty = rc_logger::rc_logger_tty();
+            if tty >= 0 {
+                sys::copy_winsize(0, tty);
+            }
+        }
         libc::SIGINT | libc::SIGTERM | libc::SIGQUIT => {
             let signame = match sig {
                 libc::SIGINT => "SIGINT",
@@ -221,7 +237,7 @@ fn set_krunlevel(level: Option<&[u8]>) -> bool {
 }
 
 /// Die as C does after dereferencing NULL.
-fn crash() -> ! {
+pub fn crash() -> ! {
     stdio::flush();
     sys::default_signals(&[sys::libc::SIGSEGV]);
     let _ = sys::kill(sys::getpid(), sys::libc::SIGSEGV);
@@ -396,7 +412,7 @@ impl Engine {
         let (crashed, err) = rc_conf_yesno("rc_crashed_start");
         let crashed = crashed || err == Some(libc::ENOENT);
 
-        for service in start_services {
+        'services: for service in start_services {
             let st = state::rc_service_state(service);
             if st & flags::FAILED != 0 {
                 continue;
@@ -412,8 +428,29 @@ impl Engine {
                 interactive = want_interactive();
             }
             if interactive {
-                // TODO(phase5-step2): the interactive boot menu.
-                eerrorx(Some(&bcat!(self.applet, ": interactive boot is not ported yet")));
+                'retry: loop {
+                    stdio::out(b"\n");
+                    einfo(Some(&bcat!("About to start the service ", service)));
+                    eindent();
+                    einfo(Some(b"1) Start the service\t\t2) Skip the service"));
+                    einfo(Some(b"3) Continue boot process\t\t4) Exit to shell"));
+                    eoutdent();
+                    loop {
+                        match read_key(true) {
+                            b'1' => break 'retry,
+                            b'2' => continue 'services,
+                            b'3' => {
+                                interactive = false;
+                                break 'retry;
+                            }
+                            b'4' => {
+                                open_shell(&self.applet);
+                                continue 'retry;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
 
             let pid = exec_service(service, b"start");
@@ -430,9 +467,15 @@ impl Engine {
             }
         }
 
-        // Store our interactive status for boot.  (Never set yet, so the
-        // marker is removed.)
-        let _ = sys::at::unlinkat(svcdir, b"interactive", 0);
+        // Store our interactive status for boot.  (RC_BOOTLEVEL: C's
+        // getenv is unchecked; env_config always sets it.)
+        let bootlevel = env::get("RC_BOOTLEVEL").unwrap_or_default();
+        if interactive && (self.runlevel == state::RC_LEVEL_SYSINIT || self.runlevel == bootlevel) {
+            // mark_interactive()
+            let _ = sys::at::openat(svcdir, b"interactive", libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o666);
+        } else {
+            let _ = sys::at::unlinkat(svcdir, b"interactive", 0);
+        }
     }
 }
 
@@ -447,12 +490,136 @@ fn want_interactive() -> bool {
     if !interactive {
         return false;
     }
-    // read_key(false): nothing when stdin isn't a terminal.
+    matches!(read_key(false), b'I' | b'i')
+}
+
+/// `read_key()`: one key from the terminal on stdin (0 if it isn't one),
+/// waiting for it if `block`, else only if one is there.
+fn read_key(block: bool) -> u8 {
+    use sys::libc;
     if !sys::isatty(0) {
-        return false;
+        return 0;
     }
-    // TODO(phase5-step2): read a key without blocking.
-    eerrorx(Some(&bcat!(applet(), ": interactive boot is not ported yet")))
+    // Save our terminal settings, to restore them at exit.
+    let orig = *TERMIOS_ORIG.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(|| sys::tcgetattr(0));
+    let mut t = sys::tcgetattr(0);
+    t.c_lflag &= !(libc::ICANON | libc::ECHO);
+    if block {
+        t.c_cc[libc::VMIN] = 1;
+    } else {
+        t.c_cc[libc::VMIN] = 0;
+        t.c_cc[libc::VTIME] = 0;
+    }
+    sys::tcsetattr_now(0, &t);
+    let mut c = [0u8];
+    if sys::read_raw(0, &mut c) == -1 {
+        eerror(Some(&bcat!("read: ", sys::Errno::last().strerror())));
+    }
+    sys::tcsetattr_now(0, &orig);
+    c[0]
+}
+
+/// `run_program()`: run `prog` (with default signals) and wait for it;
+/// its exit status is ignored.
+fn run_program(prog: &[u8]) {
+    use sys::libc;
+    let applet = applet();
+    let runlevel = RUNLEVEL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // Block signals until we have forked.
+    let old = sys::block_all_signals();
+    let pid = match sys::fork() {
+        Ok(pid) => pid,
+        Err(e) => {
+            rc_plugin_run(hook::RUNLEVEL_START_OUT, &runlevel);
+            eerrorx(Some(&bcat!(applet, ": fork: ", e.strerror())));
+        }
+    };
+    if pid == 0 {
+        sys::default_signals(&[
+            libc::SIGCHLD,
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGUSR1,
+            libc::SIGWINCH,
+        ]);
+        sys::restore_sigmask(&old);
+        if let Some(t) = termios_orig() {
+            sys::tcsetattr_now(0, &t);
+        }
+        let e = sys::execv(prog, &[prog.to_vec()]);
+        eerror(Some(&bcat!(applet, ": unable to exec `", prog, "': ", e.strerror())));
+        sys::exit_immediately(1);
+    }
+    sys::restore_sigmask(&old);
+    if exec::rc_waitpid(pid) == -1 {
+        rc_plugin_run(hook::RUNLEVEL_START_OUT, &runlevel);
+        eerrorx(Some(&bcat!(applet, ": failed to exec `", prog, "'")));
+    }
+}
+
+/// `open_shell()`: run `rc_shell`, `$SHELL`, the user's shell or /bin/sh
+/// (on a VSERVER system, halt instead).
+fn open_shell(applet: &[u8]) {
+    if rc::rc_sys() == Some("VSERVER") {
+        let e = sys::execvp(b"halt", &[b"halt".to_vec(), b"-f".to_vec()]);
+        eerrorx(Some(&bcat!(applet, ": unable to exec `halt -f': ", e.strerror())));
+    }
+    let shell = rc::conf::rc_conf_value("rc_shell")
+        .map(|s| openrc_compat::bytes::c_str_prefix(&s).to_vec())
+        .or_else(|| env::get("SHELL"))
+        .or_else(|| sys::getpwuid(sys::getuid()).map(|pw| pw.shell))
+        .unwrap_or_else(|| b"/bin/sh".to_vec());
+    run_program(&shell);
+}
+
+/// `do_sysinit()`: the banner, `init-early.sh` and `init.sh`.
+fn do_sysinit() {
+    let early = bcat!(rc::paths::LIBEXECDIR, "/sh/init-early.sh");
+    if sys::access(&early, sys::libc::F_OK).is_ok() {
+        run_program(&early);
+    }
+    let c = |col: EColor| ecolor(col).to_bytes();
+    let quiet = rc::misc::rc_yesno(env::get("EINFO_QUIET").as_deref());
+    let (sysname, release, machine) = sys::uname_full().unwrap_or_default();
+    if !quiet {
+        let mut b = bcat!(
+            "\n   ",
+            c(EColor::Good),
+            "OpenRC ",
+            c(EColor::Hilite),
+            rc::VERSION,
+            c(EColor::Normal),
+            " is starting up ",
+            c(EColor::Bracket)
+        );
+        match rc::BRANDING {
+            Some(brand) => b.extend_from_slice(&bcat!(brand, " (", machine, ")")),
+            None => b.extend_from_slice(&bcat!(sysname, " ", release, " (", machine, ")")),
+        }
+        stdio::out(&b);
+    }
+    // (Even when quiet.)
+    if let Some(sys) = rc::rc_sys() {
+        stdio::out(&bcat!(" [", sys, "]"));
+    }
+    stdio::out(&bcat!(c(EColor::Normal), "\n\n"));
+    if !quiet && rc_conf_yesno("rc_interactive").0 {
+        stdio::out(&bcat!("Press ", c(EColor::Good), "I", c(EColor::Normal), " to enter interactive boot mode\n\n"));
+    }
+
+    env::set("RC_RUNLEVEL", state::RC_LEVEL_SYSINIT);
+    run_program(&bcat!(rc::paths::LIBEXECDIR, "/sh/init.sh"));
+
+    // init may have mounted /proc so we can now detect our real sys.
+    if let Some(sys) = rc::rc_sys() {
+        env::set("RC_SYS", sys.as_bytes());
+    }
+    // (C keeps this deptree and loads another later.)
+    if rc_deptree_load_updating(0, None).is_none() {
+        eerrorx(Some(b"failed to load deptree"));
+    }
 }
 
 pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
@@ -564,10 +731,9 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
     let bootlevel = env::get("RC_BOOTLEVEL").unwrap_or_default();
     let mut runlevel = default_runlevel();
 
-    // TODO(phase5-step2): rc_logger_open(newlevel or runlevel).
-    if rc_conf_yesno("rc_logger").0 {
-        eerrorx(Some(&bcat!(applet, ": rc_logger is not ported yet")));
-    }
+    *RUNLEVEL.lock().unwrap_or_else(|e| e.into_inner()) = runlevel.clone();
+
+    rc_logger_open(newlevel.as_deref().unwrap_or(&runlevel));
 
     for sig in [libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGUSR1, libc::SIGWINCH] {
         sys::signal_setup(sig, handle_signal);
@@ -575,8 +741,9 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
 
     // Run any special sysinit foo.
     if is(newlevel.as_deref(), state::RC_LEVEL_SYSINIT) {
-        // TODO(phase5-step2): do_sysinit().
-        eerrorx(Some(&bcat!(applet, ": the sysinit runlevel is not ported yet")));
+        do_sysinit();
+        runlevel = default_runlevel();
+        *RUNLEVEL.lock().unwrap_or_else(|e| e.into_inner()) = runlevel.clone();
     }
 
     plugin::rc_plugin_load();
@@ -717,10 +884,14 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
     if let Some(nl) = &newlevel {
         state::rc_runlevel_set(nl);
         runlevel = nl.clone();
+        *RUNLEVEL.lock().unwrap_or_else(|e| e.into_inner()) = runlevel.clone();
         env::set("RC_RUNLEVEL", &runlevel);
     }
-    // (Here C closes the logger before the shutdown runlevel mounts /
-    // read-only.)
+    // We can't log beyond this point as the shutdown runlevel will mount
+    // / read-only.
+    if runlevel == state::RC_LEVEL_SHUTDOWN {
+        rc_logger_close();
+    }
 
     let _ = sys::at::mkdirat(svcdir, b"rc.starting", 0o755);
 

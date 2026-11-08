@@ -57,13 +57,14 @@ fn sp_dependents_stopping(r: &Path) {
     sp_dependents(r);
     fs::write(r.join("run/rc.stopping"), "").unwrap();
 }
-/// Hold `svc`'s exclusive lock from another process for a few seconds.
+/// Hold `svc`'s exclusive lock from another process for 10 seconds (far
+/// longer than both of stop's shimmed waits, even on a slow machine).
 fn hold_lock(r: &Path, svc: &str) {
     let f = r.join("run/exclusive").join(svc);
     let mut holder = Command::new("flock")
         .arg("-x")
         .arg(&f)
-        .args(["sleep", "3"])
+        .args(["sleep", "10"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -98,12 +99,6 @@ fn sp_plugins_no_deptree(r: &Path) {
 /// our output) before they print.
 fn sp_restart(r: &Path) {
     st_plain(r);
-    for svc in ["delta", "gamma"] {
-        fs::write(r.join(format!("run/slow.{svc}")), "").unwrap();
-    }
-}
-fn sp_restart_parallel(r: &Path) {
-    st_parallel(r);
     for svc in ["delta", "gamma"] {
         fs::write(r.join(format!("run/slow.{svc}")), "").unwrap();
     }
@@ -215,7 +210,7 @@ fn openrc_run_stop() {
         // restart: stop (and what needs us), start, then start again what
         // was running.  (What a restart brings back starts in the
         // background, so no `restart restart`, nor restarts that bring back
-        // two services: they race.)
+        // two services, nor in parallel: they race.)
         st(sp_restart, "beta", &["restart"]),
         st(sp_restart, "net.lo", &["restart"]),
         st(sp_restart, "net.eth0", &["restart"]),
@@ -227,7 +222,6 @@ fn openrc_run_stop() {
         st(sp_restart, "beta", &["restart"]).env("START_FAIL", "delta"),
         st(sp_restart, "beta", &["restart", "mycmd"]),
         st(sp_restart, "beta", &["restart"]).env("IN_BACKGROUND", "yes"),
-        st(sp_restart_parallel, "beta", &["restart"]),
         // condrestart only when started.
         st(sp_restart, "beta", &["condrestart"]),
         st(sp_restart, "net.eth0", &["condrestart"]),

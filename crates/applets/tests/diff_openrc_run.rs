@@ -7,8 +7,9 @@
 //! hup, term).  Others run the real, installed openrc-run.sh for
 //! describe and status.
 //!
-//! `lines` sleeps after printing: openrc-run relays the pty byte by byte,
-//! and C loses bytes when the script's SIGCHLD interrupts a write.
+//! The fake sleeps after printing (and `lines` again after its lines):
+//! openrc-run relays the pty byte by byte, behind the script, and C loses
+//! bytes when the script's exit (SIGCHLD) interrupts a write.
 
 mod common;
 use std::fs;
@@ -23,6 +24,7 @@ echo "argv0=$0"
 for a; do echo "arg=[$a]"; done
 echo "cwd=$(pwd)"
 env | LC_ALL=C sort | sed -e 's/^\(RC_OPENRC_PID\|RC_RUNSCRIPT_PID\)=.*/\1=<pid>/' -e '/^\(_\|SHLVL\|PWD\|OLDPWD\)=/d'
+sleep 0.3
 case "$2" in
 fail) echo "failing" >&2; exit 3 ;;
 killme) kill -9 $$ ;;

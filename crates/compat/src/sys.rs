@@ -916,15 +916,32 @@ pub fn poll(fds: &mut [PollFd], n: usize, timeout: i32) -> Result<i32, Errno> {
 /// settings, then FD_CLOEXEC on both ends when their fd flags were 0.
 /// `(master, slave)` as raw fds, or None if openpty failed.
 pub fn openpty_like(fd: i32) -> Option<(i32, i32)> {
+    openpty_impl(Some(fd))
+}
+
+/// `openpty(&m, &s, NULL, NULL, NULL)`, then FD_CLOEXEC as for
+/// [`openpty_like`].
+pub fn openpty_plain() -> Option<(i32, i32)> {
+    openpty_impl(None)
+}
+
+fn openpty_impl(like: Option<i32>) -> Option<(i32, i32)> {
     // SAFETY: termios and winsize are plain data (C ignores failures and
-    // uses whatever is in them); openpty writes two fds.
+    // uses whatever is in them); openpty writes two fds and takes NULL
+    // settings.
     unsafe {
         let mut tt: libc::termios = std::mem::zeroed();
         let mut ws: libc::winsize = std::mem::zeroed();
-        libc::tcgetattr(fd, &mut tt);
-        libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws);
+        let (pt, pw): (*const libc::termios, *const libc::winsize) = match like {
+            Some(fd) => {
+                libc::tcgetattr(fd, &mut tt);
+                libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws);
+                (&tt, &ws)
+            }
+            None => (std::ptr::null(), std::ptr::null()),
+        };
         let (mut master, mut slave) = (-1, -1);
-        if libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), &tt, &ws) != 0 {
+        if libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), pt, pw) != 0 {
             return None;
         }
         for fd in [master, slave] {
@@ -993,4 +1010,99 @@ pub fn openat_raw(dirfd: i32, path: &[u8], flags: i32, mode: u32) -> Result<i32,
 /// `.` and `..`.
 pub fn opendir_names(path: &[u8]) -> Result<Vec<Vec<u8>>, Errno> {
     readdir_names(openat(None, path, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC, 0)?)
+}
+
+/// `dup(fd)`; -1 on error.
+pub fn dup(fd: i32) -> i32 {
+    // SAFETY: dup on an int fd; a bad fd just fails.
+    unsafe { libc::dup(fd) }
+}
+
+/// `dup2(old, new)`; -1 on error.
+pub fn dup2(old: i32, new: i32) -> i32 {
+    // SAFETY: dup2 on int fds; a bad fd just fails.
+    unsafe { libc::dup2(old, new) }
+}
+
+/// `setpgid(pid, pgid)`, errors ignored (as in C).
+pub fn setpgid(pid: i32, pgid: i32) {
+    // SAFETY: plain syscall.
+    unsafe { libc::setpgid(pid, pgid) };
+}
+
+/// `uname()`'s (sysname, release, machine), or None if uname fails.
+pub fn uname_full() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    // SAFETY: utsname is plain data; uname fills it with C strings.
+    unsafe {
+        let mut uts: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut uts) != 0 {
+            return None;
+        }
+        let f = |a: &[libc::c_char]| CStr::from_ptr(a.as_ptr()).to_bytes().to_vec();
+        Some((f(&uts.sysname), f(&uts.release), f(&uts.machine)))
+    }
+}
+
+/// `asctime(localtime(&t))`: `"Sun Nov  8 12:00:00 2026\n"`; empty if it
+/// can't be formatted.
+pub fn asctime_local(t: i64) -> Vec<u8> {
+    let mut buf = [0 as libc::c_char; 64];
+    // SAFETY: tm is plain data; asctime_r needs at least 26 bytes.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() || libc::asctime_r(&tm, buf.as_mut_ptr()).is_null() {
+            return Vec::new();
+        }
+        CStr::from_ptr(buf.as_ptr()).to_bytes().to_vec()
+    }
+}
+
+/// `tcgetattr(fd)`; zeroed settings if it fails (C ignores the failure).
+pub fn tcgetattr(fd: i32) -> libc::termios {
+    // SAFETY: termios is plain data.
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        libc::tcgetattr(fd, &mut t);
+        t
+    }
+}
+
+/// `tcsetattr(fd, TCSANOW, t)`, errors ignored (as in C).
+pub fn tcsetattr_now(fd: i32, t: &libc::termios) {
+    // SAFETY: t is a valid termios.
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, t) };
+}
+
+/// `ioctl(from, TIOCGWINSZ, &ws); ioctl(to, TIOCSWINSZ, &ws)`
+/// (async-signal-safe).
+pub fn copy_winsize(from: i32, to: i32) {
+    // SAFETY: winsize is plain data; bad fds just fail.
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        libc::ioctl(from, libc::TIOCGWINSZ, &mut ws);
+        libc::ioctl(to, libc::TIOCSWINSZ, &ws);
+    }
+}
+
+/// `execvp(file, argv)`: only returns on failure.
+pub fn execvp(file: &[u8], argv: &[Vec<u8>]) -> Errno {
+    let f = to_cstring(file);
+    let args: Vec<_> = argv.iter().map(|a| to_cstring(a)).collect();
+    let mut ptrs: Vec<*const libc::c_char> = args.iter().map(|a| a.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    // SAFETY: valid C strings and a NULL-terminated array.
+    unsafe { libc::execvp(f.as_ptr(), ptrs.as_ptr()) };
+    Errno::last()
+}
+
+/// `_exit(code)`: no atexit handlers, no stdio flush.
+pub fn exit_immediately(code: i32) -> ! {
+    // SAFETY: _exit never returns.
+    unsafe { libc::_exit(code) }
+}
+
+/// `fcntl(fd, F_GETFD, 0)`: the fd flags, or -1.
+pub fn fd_flags(fd: i32) -> i32 {
+    // SAFETY: fcntl on an int fd; a bad fd just fails.
+    unsafe { libc::fcntl(fd, libc::F_GETFD, 0) }
 }

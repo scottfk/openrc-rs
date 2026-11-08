@@ -163,6 +163,13 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | Dead check: "<runlevel>: is not a valid runlevel" (after the runlevel-stop hook) can't happen, because the same test already failed earlier with "<runlevel>: not a valid runlevel". | `applets/openrc.rs` (`main`) |
 | low | The exit cleanup (removing `rc.starting`/`rc.stopping`, emptying `failed/`, unloading plugins) only runs when the program is called `rc` or `openrc`. | `applets/openrc.rs` (`cleanup`) |
 | low | The SIGCHLD handler returns without restoring `errno` when `waitpid()` fails (usually ECHILD). | `applets/openrc.rs` (`handle_signal`) |
+| low | With `-q`, sysinit still prints the banner's end: the blank lines, and ` [<rc_sys>]` on a container. | `applets/openrc.rs` (`do_sysinit`) |
+| low | `init.sh`'s exit status is ignored: sysinit carries on whether it fails or not. | `applets/openrc.rs` (`run_program`) |
+| low | Race: if a program `run_program()` starts (`init.sh`, or the interactive boot's shell) exits before openrc waits for it, as one that can't be exec'd can, the SIGCHLD handler reaps it first, the wait fails, and openrc aborts with "failed to exec". | `applets/openrc.rs` (`run_program`) |
+| low | sysinit loads the deptree twice (the first copy is never used), so a stale cache is checked twice. | `applets/openrc.rs` (`do_sysinit`) |
+| low | The `rc.log` filter drops tabs and every non-ASCII byte (so UTF-8 text is lost), and only understands CSI escapes: of `ESC ] 0;title BEL` it keeps `0;title`, of `ESC ( B` the `B`. | `rc_logger.rs` (`write_log`) |
+| low | For user services the log directory is made with a `mkpath()` that calls `mkdir()` on the whole path each time instead of on each parent, so only the last directory is ever created: with `~/.local` missing, the log can't be written. | `rc_logger.rs` (`logger`) |
+| low | Whether the temporary log is removed depends on a stale `errno` (`EROFS`) as well as the runlevel. | `rc_logger.rs` (`logger`) |
 
 # Known deviations from C
 
@@ -234,3 +241,6 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   sends each SIGTERM. Here the list is behind a lock, so if the signal
   arrives while openrc itself is updating it (a few instructions around
   each service it starts or stops), they aren't signalled.
+- **The logger reading its pty:** if `read()` fails, C uses its -1 as a
+  length (writing garbage and then crashing the logger); here nothing is
+  written.
