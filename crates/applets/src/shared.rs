@@ -1,7 +1,8 @@
 //! Port of upstream's `src/shared/` helpers used by several programs:
 //! the common options and usage text (`_usage.c`), `parse_mode`, and the
 //! `misc.c` helpers `default_runlevel()`, `_rc_deptree_load()`,
-//! `env_filter()` and `env_config()`.
+//! `env_filter()`, `env_config()`, `svc_lock()`, `svc_unlock()` and
+//! `exec_service()`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -454,6 +455,74 @@ pub fn parse_duration(duration: &[u8]) -> Option<i64> {
     let rest = &duration[p.end..];
     let unit = EXTS.iter().find(|(e, _)| e.as_bytes() == rest)?.1;
     p.value.checked_mul(unit)
+}
+
+/// `svc_lock()` (misc.c): take `applet`'s exclusive lock, returning the fd
+/// (not close-on-exec, so it can be handed to a child).  With
+/// `ignore_lock_failure`, someone else holding it means exit(0).
+pub fn svc_lock(applet: &[u8], ignore_lock_failure: bool) -> Result<i32, i32> {
+    use openrc_compat::sys::{self, libc};
+    use rc::svcdir::{RcDir, rc_dirfd_raw};
+    let fd = sys::openat_raw(
+        rc_dirfd_raw(RcDir::Exclusive),
+        applet,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK,
+        0o664,
+    )
+    .map_err(|e| e.0)?;
+    if let Err(e) = sys::flock_raw(fd, libc::LOCK_EX | libc::LOCK_NB) {
+        if ignore_lock_failure {
+            // Two services with a need b, and b's start() calling restart
+            // --no-deps on a would cause harmless errors: just ignore them.
+            stdio::exit(0);
+        }
+        openrc_einfo::eerror(Some(&bcat!("Call to flock failed: ", e.strerror())));
+        sys::close_raw(fd);
+        return Err(e.0);
+    }
+    Ok(fd)
+}
+
+/// `svc_unlock()` (misc.c): drop the exclusive lock.  Returns -1, for
+/// `fd = svc_unlock(...)`.
+pub fn svc_unlock(applet: &[u8], fd: i32) -> i32 {
+    use openrc_compat::sys;
+    use rc::svcdir::{RcDir, rc_dirfd_raw};
+    let _ = sys::at::unlinkat(rc_dirfd_raw(RcDir::Exclusive), applet, 0);
+    sys::close_raw(fd);
+    -1
+}
+
+/// `exec_service()` (misc.c; `service_start` / `service_stop`): lock the
+/// service and run `<script> --lockfd <fd> <arg>` without waiting.  The
+/// child's pid, 0 if the script is gone (the service is marked stopped)
+/// or couldn't be run, -1 if it couldn't be locked.
+pub fn exec_service(service: &[u8], arg: &[u8]) -> i32 {
+    use openrc_compat::bytes::basename_c;
+    use openrc_compat::sys::{self, libc};
+    let base = basename_c(service);
+    let Ok(fd) = svc_lock(base, false) else { return -1 };
+    let sfd = fd.to_string().into_bytes();
+    let file = rc::state::rc_service_resolve(service);
+    let mut pid = 0;
+    match &file {
+        Some(f) if sys::access(f, libc::F_OK).is_ok() => {
+            let argv = vec![service.to_vec(), b"--lockfd".to_vec(), sfd, arg.to_vec()];
+            match openrc_compat::exec::spawn_unmasked(f, &argv) {
+                Ok(p) => pid = p,
+                Err(e) => {
+                    stdio::err(&bcat!("posix_spawn: ", e.strerror(), "\n"));
+                    svc_unlock(base, fd);
+                }
+            }
+            sys::close_raw(fd);
+        }
+        _ => {
+            rc::state::rc_service_mark(service, rc::state::flags::STOPPED);
+            svc_unlock(base, fd);
+        }
+    }
+    pid
 }
 
 #[cfg(test)]

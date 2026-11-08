@@ -146,6 +146,10 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | With `rc_parallel` on a terminal, output the script leaves unread in the pty when it exits is lost: openrc-run reads at most one buffer per poll round, stops once the exit status arrives, and never closes its copy of the pty slave, so the master never hangs up. | `applets/openrc_run.rs` (`svc_exec`) |
 | low | The SIGWINCH handler code is dead: openrc-run never installs it, so window size changes don't reach the pty. | `applets/openrc_run.rs` (`handle_signal`) |
 | low | If the signal pipe can't be made, the message names the service twice (`alpha: pipe2: alpha`) instead of giving the error. | `applets/openrc_run.rs` (`svc_exec`) |
+| medium | Starting never uses what a service provides for scheduling: both lookups call `rc_deptree_depend(deptree, "iprovide", svc)` with the service and type swapped, so they find nothing. A service waiting on an inactive need is scheduled after that need only, not after what it provides; and once a service has started, services scheduled after what it provides are not started. | `applets/openrc_run.rs` (`svc_start_deps`, `svc_start_real`) |
+| low | A plugin record without `=` (say `NAME\0`) crashes openrc-run: `strsep()` leaves its pointer NULL, which C then dereferences (SIGSEGV). | `plugin.rs` (`read_environ`) |
+| low | Plugin records are parsed from one buffer that is zeroed once and reused, so a short read can run on into bytes an earlier read left behind. | `plugin.rs` (`read_environ`) |
+| low | Dead check: when starting the services we use, failed ones are meant to be skipped "while the runlevel is starting", but that test sits inside a block that only runs when the runlevel *isn't* starting. | `applets/openrc_run.rs` (`svc_start_deps`) |
 
 # Known deviations from C
 
@@ -190,9 +194,21 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **openrc-run reading the pty:** if a read of the pty master fails, C
   passes the -1 on as a length and walks off the end of its buffer; we
   treat it as nothing read.
+- **openrc-run relaying the pty:** C writes the script's output to the
+  terminal byte by byte and doesn't retry a write that the script's SIGCHLD
+  interrupts (the handler has no SA_RESTART), so now and then a byte is
+  lost. We retry.
 - **openrc-run's child pid:** C's SIGCHLD handler could, in principle, reap
   the script before `posix_spawn()` has stored its pid, losing its exit
   status. We record the pid with signals still blocked.
+- **Plugins and `rc_environ_fd`:** C sets openrc-run's own `rc_environ_fd`
+  (in librc), which a plugin binds to when it is loaded. openrc-rs doesn't
+  link librc, so it finds the variable through the plugin's own handle:
+  a plugin has to link librc.so.1 (`-lrc`) for its variables to come back.
+  One that relies on the program's librc without linking it fails to load
+  ("undefined symbol").
+- **Plugin records with no NUL in the buffer:** C's `strsep()`/`strlen()`
+  run past the end of its 8 KiB buffer; we stop at its end.
 - **`rc_config_value()` on a NULL list:** C dereferences NULL and crashes;
   we return NULL. (A NULL *value* inside a list still crashes in
   `strcmp()`, as in C.)

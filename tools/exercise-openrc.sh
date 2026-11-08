@@ -8,6 +8,7 @@
 # 20261107 - Add rc-update show/add/del/stack round trips - Claude - scottfk
 # 20261107 - Add rc-status modes, formats and state filters - Claude - scottfk
 # 20261107 - Add openrc-run simple commands (ours when swapped in, though not installed yet) - Claude - scottfk
+# 20261107 - Add openrc-run start: dry runs, already started, and C-stop/our-start round trips - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -95,3 +96,9 @@ run '$OR /etc/init.d/sshd -s status; echo s=$?; $OR /etc/init.d/sshd -S status; 
 run '$OR /etc/init.d/sshd checkconfig; echo c=$?; $OR /etc/init.d/sshd nosuchcmd; echo n=$?'
 run '$OR /etc/init.d/sshd; echo u=$?; $OR; echo d=$?'
 run '$OR /etc/init.d/local -v describe; $OR /etc/init.d/local -d status 2>&1 | grep -c .'
+# start: C stops (openrc-run isn't installed yet), ours starts again.
+run '$OR /etc/init.d/sshd start; echo s=$?; $OR /etc/init.d/local -Z start; $OR /etc/init.d/savecache --dry-run start'
+run 'IN_BACKGROUND=yes $OR /etc/init.d/local start; echo b=$?; $OR /etc/init.d/netmount ineed'
+run '/etc/init.d/local stop >/dev/null; $OR /etc/init.d/local start; echo l=$?; rc-service local status'
+run '/etc/init.d/netmount stop >/dev/null; $OR /etc/init.d/netmount start; echo n=$?; rc-service netmount status'
+run '/etc/init.d/local stop >/dev/null; $OR /etc/init.d/local --nodeps start start; echo d=$?; rc-service local status'

@@ -6,6 +6,9 @@
 //! environment it gets and acts on a few made-up commands (fail, killme,
 //! hup, term).  Others run the real, installed openrc-run.sh for
 //! describe and status.
+//!
+//! `lines` sleeps after printing: openrc-run relays the pty byte by byte,
+//! and C loses bytes when the script's SIGCHLD interrupts a write.
 
 mod common;
 use std::fs;
@@ -26,7 +29,7 @@ killme) kill -9 $$ ;;
 hup) kill -HUP "$RC_OPENRC_PID" ;;
 fail2) exit 5 ;;
 term) kill -TERM "$RC_OPENRC_PID"; sleep 1; echo "not killed" ;;
-lines) printf 'one\ntwo\n\033[Aup\nthree' ;;
+lines) printf 'one\ntwo\n\033[Aup\nthree'; sleep 0.2 ;;
 esac
 exit 0
 "#;

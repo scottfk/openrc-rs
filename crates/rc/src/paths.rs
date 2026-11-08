@@ -14,6 +14,9 @@ pub const SYSCONFDIR: &str = or(option_env!("OPENRC_SYSCONFDIR"), "/etc");
 pub const LIBEXECDIR: &str = or(option_env!("OPENRC_LIBEXECDIR"), "/usr/libexec/rc");
 /// `LOCAL_PREFIX` (`OPENRC_LOCAL_PREFIX`, default `/usr/local`).
 pub const LOCAL_PREFIX: &str = or(option_env!("OPENRC_LOCAL_PREFIX"), "/usr/local");
+/// `RC_PLUGINDIR` (`OPENRC_PLUGINDIR`, default `/usr/lib64/rc/plugins`:
+/// upstream's `$libdir/rc/plugins` with Gentoo amd64's libdir).
+pub const PLUGINDIR: &str = or(option_env!("OPENRC_PLUGINDIR"), "/usr/lib64/rc/plugins");
 /// `RC_SVCDIR`.
 pub const SVCDIR: &str = "/run/openrc";
 

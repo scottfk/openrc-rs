@@ -949,3 +949,48 @@ pub fn block_signal(sig: i32) -> libc::sigset_t {
         old
     }
 }
+
+/// `fork()`: Ok(0) in the child, Ok(pid) in the parent.
+pub fn fork() -> Result<i32, Errno> {
+    // SAFETY: plain fork; the caller decides what the child may do.
+    cvt(unsafe { libc::fork() })
+}
+
+/// `sigaction(sig, {SIG_DFL, empty mask, no flags})` for each of `sigs`.
+pub fn default_signals(sigs: &[i32]) {
+    // SAFETY: sigaction is plain data.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = libc::SIG_DFL;
+        libc::sigemptyset(&mut sa.sa_mask);
+        for &sig in sigs {
+            libc::sigaction(sig, &sa, std::ptr::null_mut());
+        }
+    }
+}
+
+/// `alarm(seconds)`.
+pub fn alarm(seconds: u32) -> u32 {
+    // SAFETY: alarm has no memory arguments.
+    unsafe { libc::alarm(seconds) }
+}
+
+/// `flock(fd, op)` on a raw fd.
+pub fn flock_raw(fd: i32, op: i32) -> Result<(), Errno> {
+    // SAFETY: flock on an int fd; a bad fd just fails.
+    cvt(unsafe { libc::flock(fd, op) }).map(|_| ())
+}
+
+/// `openat(dirfd, path, flags, mode)` handing out the raw fd (for fds that
+/// are passed to children by number).
+pub fn openat_raw(dirfd: i32, path: &[u8], flags: i32, mode: u32) -> Result<i32, Errno> {
+    let p = to_cstring(path);
+    // SAFETY: valid C string.
+    cvt(unsafe { libc::openat(dirfd, p.as_ptr(), flags, mode) })
+}
+
+/// `opendir(path)` + `readdir`: entry names in readdir order, including
+/// `.` and `..`.
+pub fn opendir_names(path: &[u8]) -> Result<Vec<Vec<u8>>, Errno> {
+    readdir_names(openat(None, path, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC, 0)?)
+}

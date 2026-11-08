@@ -92,7 +92,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] `rc-status`
 4. **`openrc-run`.** One branch per step; not installed until step 3 is done:
    - [x] groundwork and the simple commands: options, environment, running `openrc-run.sh` (with `rc_parallel` prefixing), `describe`/`help`/`status`/extra commands, dependency queries, `zap`
-   - [ ] `start`: dependencies, waiting, inactive/background/hotplug, scheduled services, plugins
+   - [x] `start`: dependencies, waiting, inactive/background/hotplug, scheduled services, plugins
    - [ ] `stop`, `restart`, `condrestart`, `pause`
 5. **`openrc`**, the runlevel engine.
 6. **`start-stop-daemon`, `supervise-daemon`**

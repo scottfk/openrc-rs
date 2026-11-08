@@ -127,8 +127,9 @@ pub struct Ns {
     /// tmpfs mounts to create, in order (`$ROOT` expanded); each mount
     /// point is created (mkdir) just before mounting.
     pub tmpfs: Vec<String>,
-    /// Bind mounts `(source, target)` (`$ROOT` expanded), after the tmpfs
-    /// mounts: e.g. fixture directories over /etc/init.d or /run/openrc.
+    /// Bind mounts `(source, target)` (`$ROOT` expanded, and `$BIN` to the
+    /// program under test), after the tmpfs mounts: e.g. fixture
+    /// directories over /etc/init.d or /run/openrc.
     pub binds: Vec<(String, String)>,
 }
 
@@ -284,7 +285,7 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
     }
     cmd.current_dir(root.unwrap_or(Path::new("/")));
     if let Some(ns) = &case.ns {
-        enter_ns_before_exec(&mut cmd, ns, &root_s, root);
+        enter_ns_before_exec(&mut cmd, ns, &root_s, root, bin);
     }
     cmd
 }
@@ -292,7 +293,9 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
 /// Arrange for the child to enter a fresh user+mount namespace and set up
 /// `ns` before exec.  Everything the child needs is allocated here: after
 /// fork (in a multi-threaded test process) it may only make raw syscalls.
-fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&Path>) {
+fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&Path>, bin: &Path) {
+    let bin_s = bin.display().to_string();
+    let expand = |s: &str| s.replace("$ROOT", root_s).replace("$BIN", &bin_s);
     use std::ffi::CString;
     // SAFETY: getuid/getgid cannot fail.
     let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
@@ -305,13 +308,8 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
         CString::new(f.display().to_string()).unwrap()
     });
     let tmpfs: Vec<CString> = ns.tmpfs.iter().map(|t| CString::new(t.replace("$ROOT", root_s)).unwrap()).collect();
-    let binds: Vec<(CString, CString)> = ns
-        .binds
-        .iter()
-        .map(|(a, b)| {
-            (CString::new(a.replace("$ROOT", root_s)).unwrap(), CString::new(b.replace("$ROOT", root_s)).unwrap())
-        })
-        .collect();
+    let binds: Vec<(CString, CString)> =
+        ns.binds.iter().map(|(a, b)| (CString::new(expand(a)).unwrap(), CString::new(expand(b)).unwrap())).collect();
 
     fn write_file(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
         // SAFETY: valid C string and buffer.
