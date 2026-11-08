@@ -1,7 +1,8 @@
 //! The fixture shared by the openrc-run start and stop tests: the
 //! `system()` services plus more, a fake `openrc-run.sh` (one line per
 //! call; `START_FAIL`/`STOP_FAIL`, `*_MARK` and `*_RUN` make a service's
-//! start or stop fail, mark itself, or run a nested command), the
+//! start or stop fail, mark itself, run a nested command, or `*_SIG`
+//! signal openrc's `$RC_PID`), the
 //! plugin-dir-patched programs, a test plugin and a fast `alarm()`.
 //!
 //! See diff_openrc_run_start.rs for how dependencies and plugins are run.
@@ -20,12 +21,15 @@ pub const PATCHED: &[u8] = b"/run/openrc/plugins.d";
 
 pub const FAKE: &str = r#"#!/bin/sh
 [ -e "/run/openrc/slow.$RC_SVCNAME" ] && { t=$(cat "/run/openrc/slow.$RC_SVCNAME"); sleep "${t:-0.5}"; }
-echo "[$RC_SVCNAME $2] argv0=$0 bg=${IN_BACKGROUND-unset} hotplug=${IN_HOTPLUG-unset} cmd=${RC_CMD-unset} reexport=${RC_REEXPORT-unset} plug=${PLUGVAR-unset} abc=${A-unset} beta=${BETAVAR-unset} level=${RC_RUNLEVEL-unset} lc=${LC_ALL-unset}"
+echo "[$RC_SVCNAME $2] argv0=$0 bg=${IN_BACKGROUND-unset} hotplug=${IN_HOTPLUG-unset} cmd=${RC_CMD-unset} reexport=${RC_REEXPORT-unset} plug=${PLUGVAR-unset} abc=${A-unset} beta=${BETAVAR-unset} level=${RC_RUNLEVEL-unset} lc=${LC_ALL-unset} reboot=${RC_REBOOT-unset} down=${RC_GOINGDOWN-unset} rc=$(cd /run/openrc && ls -d rc.starting rc.stopping 2>/dev/null | tr '\n' ,) failed=$(ls /run/openrc/failed 2>/dev/null | tr '\n' ,)"
 case "$2" in
-start) fail=$START_FAIL mark=$START_MARK run=$START_RUN ;;
-stop) fail=$STOP_FAIL mark=$STOP_MARK run=$STOP_RUN ;;
+start) fail=$START_FAIL mark=$START_MARK run=$START_RUN sig=$START_SIG ;;
+stop) fail=$STOP_FAIL mark=$STOP_MARK run=$STOP_RUN sig=$STOP_SIG ;;
 *) exit 0 ;;
 esac
+for s in $sig; do
+	case "$s" in "$RC_SVCNAME":*) kill -"${s#*:}" "$RC_PID"; sleep 0.2 ;; esac
+done
 for s in $fail; do
 	[ "$s" = "$RC_SVCNAME" ] && { echo "$RC_SVCNAME: $2 failed" >&2; exit 1; }
 done
@@ -98,6 +102,18 @@ pub fn programs() -> &'static (PathBuf, PathBuf) {
         let rust = build_dir().join("openrc-rs");
         patch(Path::new(super::OURS), &rust);
         (c, rust)
+    })
+}
+
+/// The patched C openrc (the Rust one is the multi-call binary of
+/// [`programs`]).
+pub fn c_openrc() -> &'static Path {
+    static P: OnceLock<PathBuf> = OnceLock::new();
+    P.get_or_init(|| {
+        let refdir = super::reference_dir().unwrap();
+        let c = refdir.join(concat!("openrc/openrc.plugtest-", env!("CARGO_CRATE_NAME")));
+        patch(&refdir.join("openrc/openrc"), &c);
+        c
     })
 }
 
@@ -272,4 +288,14 @@ pub fn st(setup: fn(&Path), svc: &str, args: &[&str]) -> Case {
     a.extend(args.iter().map(|s| s.to_string()));
     let a: Vec<&str> = a.iter().map(String::as_str).collect();
     Case::programs("openrc-run", c, rust, &a).sandbox(setup).ns(ns()).env("TERM", "dumb").env("RC_RUNLEVEL", "default")
+}
+
+/// `openrc args...`.  The services it starts and stops are run by the
+/// (patched) C openrc-run in both runs, so only openrc differs.
+pub fn rc(setup: fn(&Path), args: &[&str]) -> Case {
+    let (c_run, rust) = programs().clone();
+    let mut ns = system_ns();
+    ns.binds.push(("$ROOT/rc.conf".into(), "/etc/rc.conf".into()));
+    ns.binds.push((c_run.display().to_string(), "/sbin/openrc-run".into()));
+    Case::programs("openrc", c_openrc().to_path_buf(), rust, args).sandbox(setup).ns(ns).env("TERM", "dumb")
 }

@@ -58,11 +58,11 @@ impl Library {
     /// binds to when it is loaded.  openrc-rs doesn't link librc, so the
     /// variable is looked up through the plugin: the plugin has to link
     /// librc.so.1 (`-lrc`) to see it.
-    pub fn call_hook(&self, hook: i32, value: &[u8], environ_fd: i32) -> i32 {
+    pub fn call_hook(&self, hook: i32, value: Option<&[u8]>, environ_fd: i32) -> i32 {
         let f = self.sym(c"rc_plugin_hook");
         assert!(!f.is_null(), "plugins are only kept when they have a hook");
         let var = self.sym(c"rc_environ_fd").cast::<*mut libc::FILE>();
-        let v = to_cstring(value);
+        let v = value.map(to_cstring);
         // SAFETY: f is `rc_plugin_hook`, whose type the plugin ABI fixes;
         // var (if found) is librc's `FILE *rc_environ_fd`; fdopen takes
         // ownership of environ_fd and fclose releases it.
@@ -72,7 +72,7 @@ impl Library {
                 *var = fp;
             }
             let hook_fn: HookFn = std::mem::transmute::<*mut c_void, HookFn>(f);
-            let retval = hook_fn(hook, v.as_ptr());
+            let retval = hook_fn(hook, v.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()));
             let fp = if var.is_null() { fp } else { std::mem::replace(&mut *var, std::ptr::null_mut()) };
             if !fp.is_null() {
                 libc::fclose(fp);

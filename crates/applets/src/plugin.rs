@@ -1,6 +1,6 @@
 //! Port of upstream's `src/shared/plugin.c`: load the plugins in
 //! `RC_PLUGINDIR` and run their hook, each in a child process, at the
-//! points openrc-run (and later openrc) reach.  A plugin can set our
+//! points openrc-run and openrc reach.  A plugin can set our
 //! environment by writing `NAME=value\0` records to `rc_environ_fd`.
 
 use std::sync::Mutex;
@@ -114,6 +114,11 @@ fn read_environ(fd: i32) {
 /// `rc_plugin_run(hook, value)`: call every plugin's hook, each in its own
 /// child process, and take on the environment it sends back.
 pub fn rc_plugin_run(hook: i32, value: &[u8]) {
+    rc_plugin_run_opt(hook, Some(value));
+}
+
+/// `rc_plugin_run()` with a value that may be NULL (`RC_HOOK_ABORT`).
+pub fn rc_plugin_run_opt(hook: i32, value: Option<&[u8]>) {
     if rc_in_plugin() {
         return;
     }
@@ -124,7 +129,7 @@ pub fn rc_plugin_run(hook: i32, value: &[u8]) {
     *plugins() = list;
 }
 
-fn run_hooks(list: &[(Vec<u8>, Library)], hook: i32, value: &[u8]) {
+fn run_hooks(list: &[(Vec<u8>, Library)], hook: i32, value: Option<&[u8]>) {
     use sys::libc;
     for (_, lib) in list {
         let (r, w) = match sys::pipe2_cloexec() {

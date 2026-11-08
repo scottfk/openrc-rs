@@ -94,14 +94,19 @@ fn sp_plugins_no_deptree(r: &Path) {
     symlink("deptree", r.join("run/deptree")).unwrap();
 }
 /// For restarts: delta, which they bring back in the background, is slow,
-/// so we have exited (flushing our output) before it prints.
+/// as is gamma (which delta's start starts), so we have exited (flushing
+/// our output) before they print.
 fn sp_restart(r: &Path) {
     st_plain(r);
-    fs::write(r.join("run/slow.delta"), "").unwrap();
+    for svc in ["delta", "gamma"] {
+        fs::write(r.join(format!("run/slow.{svc}")), "").unwrap();
+    }
 }
 fn sp_restart_parallel(r: &Path) {
     st_parallel(r);
-    fs::write(r.join("run/slow.delta"), "").unwrap();
+    for svc in ["delta", "gamma"] {
+        fs::write(r.join(format!("run/slow.{svc}")), "").unwrap();
+    }
 }
 /// delta is slow to stop, so in parallel beta waits for it.
 fn sp_parallel_slow(r: &Path) {
