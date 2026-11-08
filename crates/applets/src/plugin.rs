@@ -12,7 +12,6 @@ use openrc_einfo::eerror;
 
 /// `RC_HOOK` values.
 pub mod hook {
-    #![allow(dead_code)] // The stop hooks come with stop (Phase 4 step 3).
     pub const SERVICE_STOP_IN: i32 = 101;
     pub const SERVICE_STOP_NOW: i32 = 102;
     pub const SERVICE_STOP_DONE: i32 = 103;

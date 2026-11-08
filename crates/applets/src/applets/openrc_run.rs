@@ -3,8 +3,8 @@
 //! and runs `openrc-run.sh` for each command, handling dependencies,
 //! locking and state for start and stop.
 //!
-//! Phase 4 step 2: everything except `stop`, `restart` and `condrestart`,
-//! which follow in the next step.  Until then the applet isn't installed.
+//! `pause` isn't one of C's commands (QUIRK), so it goes to openrc-run.sh
+//! like any other.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
@@ -156,6 +156,14 @@ fn start_services(list: &[Vec<u8>]) {
     }
 }
 
+/// `get_started_services()`: the restart list is what's started, then
+/// what's inactive.
+fn get_started_services() {
+    let mut list = state::rc_services_in_state(flags::STARTED);
+    list.extend(state::rc_services_in_state(flags::INACTIVE));
+    *RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()) = Some(list);
+}
+
 extern "C" fn cleanup() {
     restore_state();
     if !plugin::rc_in_plugin() {
@@ -179,6 +187,9 @@ struct Run {
     /// eprefix() string with rc_parallel.
     prefix: Option<Vec<u8>>,
     deptree: Option<DepTree>,
+    /// C's `deptypes_*` lists, set up by the first start or stop with
+    /// dependencies (until then lookups through them find nothing).
+    deptypes: bool,
     deps: bool,
     dry_run: bool,
     in_background: bool,
@@ -546,6 +557,7 @@ impl Run {
                 self.start_failed();
             }
         }
+        self.deptypes = true;
 
         let broken = self.depends(&["broken"], 0);
         if !broken.is_empty() {
@@ -724,6 +736,255 @@ impl Run {
             stdio::out(&bcat!(" ", self.applet, "\n"));
         } else {
             self.svc_start_real();
+        }
+        0
+    }
+
+    // --- stop -----------------------------------------------------------
+
+    /// The STOP_OUT hook, then exit(1).
+    fn stop_failed(&self) -> ! {
+        rc_plugin_run(hook::SERVICE_STOP_OUT, &self.applet);
+        stdio::exit(1)
+    }
+
+    /// `svc_stop_check()`: may we stop?  Takes the lock and marks us
+    /// stopping (returning our state), returns None when already stopped,
+    /// or exits.
+    fn svc_stop_check(&self) -> Option<i32> {
+        let st = state::rc_service_state(&self.applet);
+        if state::rc_runlevel_stopping() && st & flags::FAILED != 0 {
+            self.stop_failed();
+        }
+        // QUIRK: C's parentheses make this "unless started and not
+        // inactive", so an inactive service is never stopped in the
+        // background.
+        if self.in_background && !(st & flags::STARTED != 0 && st & flags::INACTIVE == 0) {
+            self.stop_failed();
+        }
+        if st & flags::STOPPED != 0 {
+            ewarn(Some(&bcat!("WARNING: ", self.applet, " is already stopped")));
+            return None;
+        }
+
+        if EXCLUSIVE_FD.load(SeqCst) == -1 {
+            let r = svc_lock(&self.applet, !self.deps);
+            EXCLUSIVE_FD.store(*r.as_ref().unwrap_or(&-1), SeqCst);
+            if let Err(errno) = r {
+                if errno != sys::libc::EWOULDBLOCK {
+                    eerror(Some(&bcat!(self.applet, ": failed to acquire lock: ", sys::strerror(errno))));
+                } else if st & flags::STOPPING != 0 {
+                    ewarn(Some(&bcat!("WARNING: ", self.applet, " is already stopping")));
+                } else {
+                    eerror(Some(&bcat!("ERROR: ", self.applet, " stopped by something else")));
+                }
+                self.stop_failed();
+            }
+        }
+        sys::set_cloexec(EXCLUSIVE_FD.load(SeqCst));
+
+        state::rc_service_mark(&self.applet, flags::STOPPING);
+        rc_plugin_run(hook::SERVICE_STOP_IN, &self.applet);
+
+        if !state::rc_runlevel_stopping() {
+            if state::rc_service_in_runlevel(&self.applet, state::RC_LEVEL_SYSINIT) {
+                ewarn(Some(b"WARNING: you are stopping a sysinit service"));
+            } else if state::rc_service_in_runlevel(&self.applet, state::RC_LEVEL_BOOT) {
+                ewarn(Some(b"WARNING: you are stopping a boot service"));
+            }
+        }
+        Some(st)
+    }
+
+    /// `svc_stop_deps()`: stop what needs us, and wait for what uses us.
+    fn svc_stop_deps(&mut self, st: i32) {
+        if st & flags::WASINACTIVE != 0 {
+            return;
+        }
+        let mut depoptions = options::TRACE;
+        let (strict, err) = rc_conf_yesno("rc_depend_strict");
+        if strict || err == Some(sys::libc::ENOENT) {
+            depoptions |= options::STRICT;
+        }
+        if self.deptree.is_none() {
+            self.deptree = rc_deptree_load_updating(0, None);
+            if self.deptree.is_none() {
+                rc_plugin_run(hook::SERVICE_STOP_OUT, &self.applet);
+                eerrorx(Some(b"failed to load deptree"));
+            }
+        }
+        self.deptypes = true;
+
+        let services = self.depends(&["needsme"], depoptions);
+        let mut tmplist: Vec<Vec<u8>> = Vec::new();
+        for svc in services.iter().rev() {
+            let st = state::rc_service_state(svc);
+            // Don't stop failed services again.  If you remove this
+            // check, ensure that the exclusive file isn't created.
+            if st & flags::FAILED != 0 && state::rc_runlevel_stopping() {
+                continue;
+            }
+            if st & (flags::STARTED | flags::INACTIVE) == 0 {
+                continue;
+            }
+            if self.dry_run {
+                stdio::out(&bcat!(" ", openrc_compat::bytes::c_str_prefix(svc)));
+                continue;
+            }
+            self.svc_wait(svc);
+            if state::rc_service_state(svc) & (flags::STARTED | flags::INACTIVE) != 0 {
+                let pid = exec_service(svc, b"stop");
+                if !rc_conf_yesno("rc_parallel").0 {
+                    exec::rc_waitpid(pid);
+                }
+                tmplist.push(svc.clone());
+            }
+        }
+        if self.dry_run {
+            return;
+        }
+
+        for svc in &tmplist {
+            if state::rc_service_state(svc) & flags::STOPPED != 0 {
+                continue;
+            }
+            self.svc_wait(svc);
+            if state::rc_service_state(svc) & flags::STOPPED != 0 {
+                continue;
+            }
+            if state::rc_runlevel_stopping() {
+                // If shutting down, we should stop even if a dependent
+                // failed.
+                if self.runlevel == state::RC_LEVEL_SHUTDOWN || self.runlevel == state::RC_LEVEL_SINGLE {
+                    continue;
+                }
+                state::rc_service_mark(&self.applet, flags::FAILED);
+            }
+            rc_plugin_run(hook::SERVICE_STOP_OUT, &self.applet);
+            eerrorx(Some(&bcat!("ERROR: cannot stop ", self.applet, " as ", svc, " is still up")));
+        }
+
+        // Now wait for other services that may use us and are stopping.
+        // This is important when a runlevel stops.
+        for svc in self.depends(&["needsme", "wantsme", "usesme", "beforeme"], depoptions) {
+            if state::rc_service_state(&svc) & flags::STOPPED != 0 {
+                continue;
+            }
+            self.svc_wait(&svc);
+        }
+    }
+
+    /// `load_dep_env()`: take on what the services we use reexport.
+    fn load_dep_env(&self) {
+        if !self.deptypes || self.deptree.is_none() {
+            return;
+        }
+        for svc in self.depends(&["ineed", "iwant", "iuse"], 0) {
+            self.svc_getenv(&svc);
+        }
+    }
+
+    /// `svc_stop_real()`: run the script's stop and mark us stopped (or
+    /// inactive, in the background).
+    fn svc_stop_real(&self) {
+        self.load_dep_env();
+        // If we're stopping localmount, set LC_ALL=C so that bash doesn't
+        // load anything blocking the unmounting of /usr.
+        if self.applet == b"localmount" {
+            env::set("LC_ALL", b"C");
+        }
+        if let Some(ib) = &self.ibsave {
+            env::set_bytes(b"IN_BACKGROUND", ib);
+        }
+        rc_plugin_run(hook::SERVICE_STOP_NOW, &self.applet);
+        SKIP_MARK.store(false, SeqCst);
+        let stopped = self.svc_exec(b"stop") == 0;
+        if self.ibsave.is_some() {
+            env::unset("IN_BACKGROUND");
+        }
+        if stopped && !SKIP_MARK.load(SeqCst) {
+            state::rc_service_mark(&self.applet, if self.in_background { flags::INACTIVE } else { flags::STOPPED });
+        }
+        rc_plugin_run(hook::SERVICE_STOP_DONE, &self.applet);
+        rc_plugin_run(hook::SERVICE_STOP_OUT, &self.applet);
+        if !stopped {
+            eerrorx(Some(&bcat!("ERROR: ", self.applet, " failed to stop")));
+        }
+    }
+
+    /// `svc_stop()`: 1 if we were stopped already.
+    fn svc_stop(&mut self) -> i32 {
+        let mut st = 0;
+        if self.dry_run {
+            einfon(Some(b"stop:"));
+        } else {
+            match self.svc_stop_check() {
+                Some(s) => st = s,
+                None => return 1,
+            }
+        }
+        if self.deps {
+            self.svc_stop_deps(st);
+        }
+        if self.dry_run {
+            stdio::out(&bcat!(" ", self.applet, "\n"));
+        } else {
+            self.svc_stop_real();
+        }
+        0
+    }
+
+    /// `cmd_stop()`.
+    fn cmd_stop(&mut self, cmd: &[u8]) -> i32 {
+        // (QUIRK: `pause` isn't in the command table, so this never runs.)
+        if cmd == b"pause" {
+            ewarn(Some(b"WARNING: 'pause' is deprecated; please use '--nodeps stop'"));
+            self.deps = false;
+        }
+        if self.deps && self.in_background {
+            get_started_services();
+        }
+        if self.svc_stop() == 1 {
+            // Stopped already.
+            return 0;
+        }
+        if self.deps {
+            let st = state::rc_service_state(&self.applet);
+            if !self.in_background && !state::rc_runlevel_stopping() && st & flags::STOPPED != 0 {
+                unhotplug(&self.applet);
+            }
+            if self.in_background && st & flags::INACTIVE != 0 {
+                let list = RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();
+                for svc in &list {
+                    if state::rc_service_state(svc) & flags::STOPPED != 0 {
+                        state::rc_service_schedule_start(&self.applet, svc);
+                    }
+                }
+            }
+        }
+        0
+    }
+
+    /// `svc_restart()`: stop (noting what was running), start, then start
+    /// again what was running.
+    fn svc_restart(&mut self) -> i32 {
+        if state::rc_service_state(&self.applet) & flags::STOPPED == 0 {
+            get_started_services();
+            self.svc_stop();
+            if self.dry_run {
+                ewarn(Some(b"Cannot calculate restart start dependencies on a dry-run"));
+            }
+        }
+        self.svc_start();
+        let list = RESTART_SERVICES.lock().unwrap_or_else(|e| e.into_inner()).take();
+        start_services(&list.unwrap_or_default());
+        0
+    }
+
+    /// `cmd_condrestart()`: restart if started.
+    fn cmd_condrestart(&mut self) -> i32 {
+        if state::rc_service_state(&self.applet) & flags::STARTED != 0 {
+            self.svc_restart();
         }
         0
     }
@@ -927,6 +1188,7 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
         runlevel,
         prefix,
         deptree: None,
+        deptypes: false,
         deps,
         dry_run,
         in_background,
@@ -953,9 +1215,9 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
                 Cmd::Deptype => run.resolve_deptype(cmd),
                 Cmd::Zap => run.cmd_zap(),
                 Cmd::Start => run.svc_start(),
-                Cmd::Stop | Cmd::Restart | Cmd::Condrestart => {
-                    eerrorx(Some(&bcat!(applet, ": `", cmd, "' is not ported yet")))
-                }
+                Cmd::Stop => run.cmd_stop(cmd),
+                Cmd::Restart => run.svc_restart(),
+                Cmd::Condrestart => run.cmd_condrestart(),
             },
             None => run.svc_exec(cmd),
         };
