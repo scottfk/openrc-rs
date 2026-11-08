@@ -153,6 +153,17 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | medium | An inactive service can't be stopped in the background (`IN_BACKGROUND=yes`): a misplaced parenthesis makes the check "refuse unless started and not inactive" rather than "refuse unless started or inactive", so openrc-run exits 1. | `applets/openrc_run.rs` (`svc_stop_check`) |
 | low | `pause` doesn't work. The handler that would warn it's deprecated and stop without dependencies is never reached, because `pause` isn't in the command table. It goes to `openrc-run.sh`, which fails with "command 'pause' not a default nor extra command". | `applets/openrc_run.rs` (`cmd_stop`) |
 
+## openrc
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | `openrc -o <runlevel>` crashes (SIGSEGV) unless `RC_BOOTLEVEL` is in the environment. `set_krunlevel()` compares the level with `getenv("RC_BOOTLEVEL")`, but `-o` is handled before `env_config()` sets it, so from an ordinary shell `strcmp()` gets NULL. | `applets/openrc.rs` (`set_krunlevel`) |
+| low | `openrc -o ''` reports "runlevel `(null)' does not exist": the empty argument becomes NULL and is printed with `%s`. | `applets/openrc.rs` (`main`) |
+| low | `-a <arg>` is in the option string but has no handler, so it is a usage error. | `applets/openrc.rs` (`main`) |
+| low | Dead check: "<runlevel>: is not a valid runlevel" (after the runlevel-stop hook) can't happen, because the same test already failed earlier with "<runlevel>: not a valid runlevel". | `applets/openrc.rs` (`main`) |
+| low | The exit cleanup (removing `rc.starting`/`rc.stopping`, emptying `failed/`, unloading plugins) only runs when the program is called `rc` or `openrc`. | `applets/openrc.rs` (`cleanup`) |
+| low | The SIGCHLD handler returns without restoring `errno` when `waitpid()` fails (usually ECHILD). | `applets/openrc.rs` (`handle_signal`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -219,3 +230,7 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **stdout buffering:** stdout is fully buffered when it isn't a tty, as with
   glibc, but where in the stream the flushes happen may differ. The bytes are
   identical.
+- **openrc's SIGUSR1 abort:** C walks its list of running services and
+  sends each SIGTERM. Here the list is behind a lock, so if the signal
+  arrives while openrc itself is updating it (a few instructions around
+  each service it starts or stops), they aren't signalled.
