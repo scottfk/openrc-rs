@@ -16,6 +16,7 @@
 # 20261109 - Add supervise-daemon: the sv-test service (if installed), signals through the FIFO, a direct start as nobody - Claude - scottfk
 # 20261109 - Mask supervised services' uptimes; the ssd test-mode stop matches /bin/true, not sv-test's sleep - Claude - scottfk
 # 20261109 - Add openrc-shutdown's harmless commands (never -D: on sysvinit it really reboots) - Claude - scottfk
+# 20261109 - Add openrc-init when not PID 1 (it only returns 1) - Claude - scottfk
 export TERM=xterm COLUMNS=100
 # (A supervised service's uptime, "started 00:01:02 (0)", is masked.)
 run() {
@@ -140,3 +141,5 @@ run 'export RC_SVCNAME=exsv; $SV exsv -S -p /run/exsv.pid -u nobody -D 200ms /bi
 OSD=/sbin/openrc-shutdown
 export OSD
 run '$OSD -c; echo c=$?; $OSD; echo u=$?; $OSD -r -p now; echo two=$?; $OSD -r 25:00; echo t=$?; $OSD -h | head -3'
+# openrc-init: not PID 1, so it returns 1 at once.
+run '/sbin/openrc-init; echo i=$?; /sbin/openrc-init reboot; echo i=$?'

@@ -1465,3 +1465,89 @@ pub fn local_hour_min(t: i64) -> (i32, i32) {
         (tm.tm_hour, tm.tm_min)
     }
 }
+
+/// `reboot(cmd)`.  (In a PID namespace other than the first, the kernel
+/// ends the namespace instead: its init is killed.)
+pub fn reboot(cmd: i32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::reboot(cmd) }).map(drop)
+}
+
+/// `sync()`.
+pub fn sync() {
+    // SAFETY: plain syscall.
+    unsafe { libc::sync() }
+}
+
+/// `clock_gettime(CLOCK_BOOTTIME)` in nanoseconds.
+pub fn boottime_ns() -> i64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: ts is valid.
+    unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+    ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+}
+
+/// `clock_nanosleep(CLOCK_BOOTTIME, 0, ns)`, resuming after EINTR when
+/// `restart` (else returning early).
+pub fn boottime_sleep(ns: i64, restart: bool) {
+    let mut ts = libc::timespec { tv_sec: ns / 1_000_000_000, tv_nsec: ns % 1_000_000_000 };
+    loop {
+        let mut rem = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: ts and rem are valid.  (clock_nanosleep returns the
+        // error number rather than setting errno.)
+        let r = unsafe { libc::clock_nanosleep(libc::CLOCK_BOOTTIME, 0, &ts, &mut rem) };
+        if r != libc::EINTR || !restart {
+            return;
+        }
+        ts = rem;
+    }
+}
+
+/// `open_rwfifo(path, nonblock)` (helpers.h): make the FIFO, open it for
+/// reading, and leak a writer so reads never see EOF.  The read fd.
+pub fn open_rwfifo(path: &[u8], nonblock: bool) -> Result<i32, Errno> {
+    if let Err(e) = mkfifo(path, 0o600)
+        && e.0 != libc::EEXIST
+    {
+        return Err(e);
+    }
+    let r = open_raw(path, libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC, 0)?;
+    // The writer is leaked for the life of the process.
+    let w = match open_raw(path, libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC, 0) {
+        Ok(w) => w,
+        Err(e) => {
+            close_raw(r);
+            return Err(e);
+        }
+    };
+    if !nonblock {
+        // SAFETY: fcntl on our fd.
+        let flags = unsafe { libc::fcntl(r, libc::F_GETFL) };
+        // SAFETY: as above.
+        if flags == -1 || unsafe { libc::fcntl(r, libc::F_SETFL, flags & !libc::O_NONBLOCK) } == -1 {
+            let e = Errno::last();
+            close_raw(w);
+            close_raw(r);
+            return Err(e);
+        }
+    }
+    Ok(r)
+}
+
+/// `perror(what)`: `what: strerror(errno)` on stderr.
+pub fn perror(what: &[u8]) {
+    let e = Errno::last();
+    let mut m = what.to_vec();
+    m.extend_from_slice(b": ");
+    m.extend_from_slice(&e.strerror());
+    m.push(b'\n');
+    write_all(2, &m);
+}
+
+/// `pipe2(fds, flags)`: `(read end, write end)` as raw fds.
+pub fn pipe2_flags(flags: i32) -> Result<(i32, i32), Errno> {
+    let mut fds = [0; 2];
+    // SAFETY: fds has room for two fds.
+    cvt(unsafe { libc::pipe2(fds.as_mut_ptr(), flags) })?;
+    Ok((fds[0], fds[1]))
+}

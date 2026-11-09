@@ -8,6 +8,7 @@ pub mod mark_service;
 pub mod mountinfo;
 pub mod newer;
 pub mod openrc;
+pub mod openrc_init;
 pub mod openrc_run;
 pub mod openrc_shutdown;
 pub mod rc_depend;
@@ -137,6 +138,7 @@ pub const APPLETS: &[Applet] = &[
     bin("rc-status", rc_status::main),
     sbin("openrc-run", openrc_run::main),
     sbin("openrc", openrc::main),
+    sbin("openrc-init", openrc_init::main),
     sbin("openrc-shutdown", openrc_shutdown::main),
     sbin("start-stop-daemon", start_stop_daemon::main),
     sbin("supervise-daemon", supervise_daemon::main),
