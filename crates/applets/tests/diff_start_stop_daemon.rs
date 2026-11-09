@@ -23,14 +23,16 @@ use common::Case;
 use common::fakedaemon::fakedaemon;
 
 const P: &str = "mount --bind \"$ROOT/run\" /run/openrc";
-// The victims run under a `sh` that waits for them: start-stop-daemon is
+// The victims run under a `sh` that waits for them (and we wait, without
+// forking, for the pidfile: a fork racing the victim's would change its
+// pid): start-stop-daemon is
 // PID 1 here and never reaps, so a killed victim would otherwise linger
 // as a zombie (which a pid lookup still finds).
 /// One fake daemon running as `fakedaemon victim one`, pid in run/victim.pid.
 const P_VICTIM: &str = "mount --bind \"$ROOT/run\" /run/openrc\n\
     FAKE_OUT= sh -c '\"$0\" victim one >/dev/null 2>&1 & echo $! > \"$1\"; wait' \
     \"$ROOT/bin/fakedaemon\" \"$ROOT/run/victim.pid\" &\n\
-    sleep 0.2";
+    while ! [ -s \"$ROOT/run/victim.pid\" ]; do :; done; sleep 0.2";
 /// Two of them.
 const P_TWO: &str = "mount --bind \"$ROOT/run\" /run/openrc\n\
     FAKE_OUT= sh -c '\"$0\" victim one >/dev/null 2>&1 & \"$0\" victim two >/dev/null 2>&1 & wait' \
@@ -40,7 +42,7 @@ const P_TWO: &str = "mount --bind \"$ROOT/run\" /run/openrc\n\
 const P_STUBBORN: &str = "mount --bind \"$ROOT/run\" /run/openrc\n\
     FAKE_OUT= FAKE_MODE=stubborn sh -c '\"$0\" victim >/dev/null 2>&1 & echo $! > \"$1\"; wait' \
     \"$ROOT/bin/fakedaemon\" \"$ROOT/run/victim.pid\" &\n\
-    sleep 0.2";
+    while ! [ -s \"$ROOT/run/victim.pid\" ]; do :; done; sleep 0.2";
 /// One that ignores SIGTERM and SIGHUP and exits after 0.5s.
 const P_SLOWEXIT: &str = "mount --bind \"$ROOT/run\" /run/openrc\n\
     FAKE_OUT= FAKE_MODE=stubborn-slowexit sh -c '\"$0\" victim >/dev/null 2>&1 & wait' \

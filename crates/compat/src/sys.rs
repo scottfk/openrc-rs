@@ -1302,3 +1302,42 @@ pub fn clear_cloexec(fd: i32, flags: i32) -> bool {
     // SAFETY: fcntl on an int fd.
     unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != -1 }
 }
+
+/// `strftime(buf, size, fmt, localtime(&t))` with C's buffer size: empty
+/// when the result doesn't fit in `size - 1` bytes.
+pub fn strftime_local(t: i64, fmt: &[u8], size: usize) -> Vec<u8> {
+    let f = to_cstring(fmt);
+    let mut buf = vec![0 as libc::c_char; size.max(1)];
+    // SAFETY: tm is plain data; strftime writes at most `size` bytes.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return Vec::new();
+        }
+        let n = libc::strftime(buf.as_mut_ptr(), buf.len(), f.as_ptr(), &tm);
+        buf[..n].iter().map(|&c| c as u8).collect()
+    }
+}
+
+/// Block every signal except `keep`; returns the previous mask.
+pub fn block_all_but(keep: &[i32]) -> libc::sigset_t {
+    // SAFETY: sigset_t is plain data, initialised by sigfillset/sigprocmask.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut set);
+        for &s in keep {
+            libc::sigdelset(&mut set, s);
+        }
+        libc::sigemptyset(&mut old);
+        libc::sigprocmask(libc::SIG_SETMASK, &set, &mut old);
+        old
+    }
+}
+
+/// `mkfifo(path, mode)`.
+pub fn mkfifo(path: &[u8], mode: u32) -> Result<(), Errno> {
+    let p = to_cstring(path);
+    // SAFETY: valid C string.
+    cvt(unsafe { libc::mkfifo(p.as_ptr(), mode) }).map(drop)
+}

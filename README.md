@@ -68,6 +68,19 @@ reboot                                       # then diff the serial-console boot
 tools/swap-install.sh restore
 ```
 
+The exercise script also uses a supervised service, `sv-test`, if the
+test system has it (`/etc/init.d/sv-test`, in the default runlevel):
+
+```sh
+#!/sbin/openrc-run
+description="openrc-rs supervise-daemon test"
+supervisor=supervise-daemon
+command=/bin/sleep
+command_args=infinity
+command_user=nobody
+respawn_delay=1
+```
+
 Once swapped in, C OpenRC's own `openrc`, `openrc-run`, `rc-status` and so on
 load our `libeinfo.so.1`, so the whole boot exercises it.
 
@@ -99,7 +112,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] the `rc.log` logger, `sysinit` (banner, `init.sh`, kernel command line), interactive boot; installed as `$sbindir/openrc`
 6. **`start-stop-daemon`, `supervise-daemon`.** One branch per step:
    - [x] `start-stop-daemon`, with `schedules.c`, capabilities (no libcap) and readiness notification
-   - [ ] `supervise-daemon`
+   - [x] `supervise-daemon`: respawning, health checks, the control FIFO, readiness, `--reexec`
 7. **`openrc-init`, `openrc-shutdown`**, plus `halt`/`poweroff`/`reboot`/`shutdown`.
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over
