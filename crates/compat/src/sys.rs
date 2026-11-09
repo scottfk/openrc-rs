@@ -110,6 +110,8 @@ pub struct Stat {
     pub size: i64,
     /// `st_mtime` (seconds).
     pub mtime: i64,
+    /// `st_dev`: the device of the filesystem holding the file.
+    pub dev: u64,
 }
 
 impl Stat {
@@ -123,6 +125,8 @@ impl Stat {
             nlink: st.st_nlink as u64,
             size: st.st_size,
             mtime: st.st_mtime,
+            #[allow(clippy::unnecessary_cast)]
+            dev: st.st_dev as u64,
         }
     }
 
@@ -1340,4 +1344,124 @@ pub fn mkfifo(path: &[u8], mode: u32) -> Result<(), Errno> {
     let p = to_cstring(path);
     // SAFETY: valid C string.
     cvt(unsafe { libc::mkfifo(p.as_ptr(), mode) }).map(drop)
+}
+
+/// `major(dev)`.
+pub fn major(dev: u64) -> u32 {
+    libc::major(dev as libc::dev_t)
+}
+
+/// `uname()`'s nodename (the host name), or empty.
+pub fn uname_nodename() -> Vec<u8> {
+    // SAFETY: utsname is plain data; uname fills it with C strings.
+    unsafe {
+        let mut uts: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut uts) != 0 {
+            return Vec::new();
+        }
+        CStr::from_ptr(uts.nodename.as_ptr()).to_bytes().to_vec()
+    }
+}
+
+/// `ttyname(fd)`.
+pub fn ttyname(fd: i32) -> Option<Vec<u8>> {
+    // SAFETY: ttyname returns NULL or a C string in a static buffer, which
+    // we copy before any other call.
+    unsafe {
+        let p = libc::ttyname(fd);
+        (!p.is_null()).then(|| CStr::from_ptr(p).to_bytes().to_vec())
+    }
+}
+
+/// A utmp entry: `(ut_type, ut_user, ut_line)`.
+pub type UtmpEntry = (i16, Vec<u8>, Vec<u8>);
+
+/// `setutxent(); while (getutxent()) ...; endutxent();`.
+pub fn utmp_entries() -> Vec<UtmpEntry> {
+    let field = |a: &[libc::c_char]| a.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect::<Vec<u8>>();
+    let mut out = Vec::new();
+    // SAFETY: getutxent returns NULL or a pointer to a static utmpx, which
+    // we copy out of before the next call.
+    unsafe {
+        libc::setutxent();
+        loop {
+            let u = libc::getutxent();
+            let Some(u) = u.as_ref() else { break };
+            out.push((u.ut_type, field(&u.ut_user), field(&u.ut_line)));
+        }
+        libc::endutxent();
+    }
+    out
+}
+
+unsafe extern "C" {
+    /// glibc's `updwtmp()`; its `struct utmp` is laid out as `utmpx`.
+    fn updwtmp(file: *const libc::c_char, ut: *const libc::utmpx);
+}
+
+/// `log_wtmp()` (wtmp.c): append a record to `/var/log/wtmp`, with the
+/// kernel release where the host name would go.  Strings are copied as
+/// `strncpy()` does (not NUL-terminated when they fill the field).
+pub fn log_wtmp(user: &[u8], id: &[u8], pid: i32, ut_type: i16, line: &[u8]) {
+    fn strncpy(dst: &mut [libc::c_char], src: &[u8]) {
+        for (d, &s) in dst.iter_mut().zip(src.iter().take_while(|&&c| c != 0)) {
+            *d = s as libc::c_char;
+        }
+    }
+    // SAFETY: utmpx is plain data (all-zero is valid); gettimeofday and
+    // uname fill structs we own; updwtmp reads ut and the path.
+    unsafe {
+        let mut ut: libc::utmpx = std::mem::zeroed();
+        let mut tv = libc::timeval { tv_sec: 0, tv_usec: 0 };
+        libc::gettimeofday(&mut tv, std::ptr::null_mut());
+        ut.ut_tv.tv_sec = tv.tv_sec as _;
+        ut.ut_tv.tv_usec = tv.tv_usec as _;
+        ut.ut_pid = pid;
+        ut.ut_type = ut_type;
+        strncpy(&mut ut.ut_user, user);
+        strncpy(&mut ut.ut_id, id);
+        strncpy(&mut ut.ut_line, line);
+        let mut uts: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut uts) == 0 {
+            let rel: Vec<u8> = uts.release.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+            strncpy(&mut ut.ut_host, &rel);
+        }
+        updwtmp(c"/var/log/wtmp".as_ptr(), &ut);
+    }
+}
+
+/// The struct sysvinit reads from `/run/initctl` (initreq.h): 384 bytes.
+pub fn init_request(cmd: i32, runlevel: i32, data: &[u8]) -> Vec<u8> {
+    const INIT_MAGIC: i32 = 0x0309_1969;
+    let mut b = Vec::with_capacity(384);
+    for v in [INIT_MAGIC, cmd, runlevel, 0] {
+        b.extend_from_slice(&v.to_ne_bytes());
+    }
+    let mut d = [0u8; 368];
+    d[..data.len().min(368)].copy_from_slice(&data[..data.len().min(368)]);
+    b.extend_from_slice(&d);
+    b
+}
+
+/// `nanosleep()` for `ns`, carrying on with the remainder after EINTR.
+pub fn nanosleep_restart(ns: i64) {
+    let mut ts = libc::timespec { tv_sec: ns / 1_000_000_000, tv_nsec: ns % 1_000_000_000 };
+    loop {
+        let mut rem = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: ts and rem are valid.
+        if unsafe { libc::nanosleep(&ts, &mut rem) } == 0 || Errno::last().0 != libc::EINTR {
+            return;
+        }
+        ts = rem;
+    }
+}
+
+/// `localtime(&t)`'s (tm_hour, tm_min).
+pub fn local_hour_min(t: i64) -> (i32, i32) {
+    // SAFETY: tm is plain data.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        (tm.tm_hour, tm.tm_min)
+    }
 }

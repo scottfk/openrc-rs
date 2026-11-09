@@ -15,6 +15,7 @@
 # 20261109 - Add start-stop-daemon: test mode, user/group change, umask, nice, capabilities, stop by pidfile - Claude - scottfk
 # 20261109 - Add supervise-daemon: the sv-test service (if installed), signals through the FIFO, a direct start as nobody - Claude - scottfk
 # 20261109 - Mask supervised services' uptimes; the ssd test-mode stop matches /bin/true, not sv-test's sleep - Claude - scottfk
+# 20261109 - Add openrc-shutdown's harmless commands (never -D: on sysvinit it really reboots) - Claude - scottfk
 export TERM=xterm COLUMNS=100
 # (A supervised service's uptime, "started 00:01:02 (0)", is masked.)
 run() {
@@ -134,3 +135,8 @@ fi
 SV=/sbin/supervise-daemon
 export SV
 run 'export RC_SVCNAME=exsv; $SV exsv -S -p /run/exsv.pid -u nobody -D 200ms /bin/sleep -- 30; echo s=$?; sleep 0.5; ps -o user=,args= -p $(cat /run/openrc/options/exsv/child_pid); $SV exsv -s TERM; sleep 1; cat /run/openrc/options/exsv/start_count; echo; $SV exsv -K -p /run/exsv.pid; echo k=$?; ls /run/exsv.pid /run/openrc/supervise-exsv.ctl 2>&1'
+# openrc-shutdown: only what can't shut the system down.  Not --dry-run:
+# with sysvinit's /run/initctl it still changes the runlevel (QUIRKS.md).
+OSD=/sbin/openrc-shutdown
+export OSD
+run '$OSD -c; echo c=$?; $OSD; echo u=$?; $OSD -r -p now; echo two=$?; $OSD -r 25:00; echo t=$?; $OSD -h | head -3'

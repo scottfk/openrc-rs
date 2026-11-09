@@ -113,7 +113,10 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
 6. **`start-stop-daemon`, `supervise-daemon`.** One branch per step:
    - [x] `start-stop-daemon`, with `schedules.c`, capabilities (no libcap) and readiness notification
    - [x] `supervise-daemon`: respawning, health checks, the control FIFO, readiness, `--reexec`
-7. **`openrc-init`, `openrc-shutdown`**, plus `halt`/`poweroff`/`reboot`/`shutdown`.
+7. **`openrc-init`, `openrc-shutdown`.** One branch per step:
+   - [x] `openrc-shutdown`, with `broadcast.c`, `sysvinit.c` and wtmp
+   - [ ] `openrc-init`
+   - (`halt`/`poweroff`/`reboot`/`shutdown` are shell wrappers around `openrc-shutdown`, installed with `-Dsysvinit=true`: nothing to port)
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over
 a real system's OpenRC.
