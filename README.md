@@ -115,7 +115,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] `supervise-daemon`: respawning, health checks, the control FIFO, readiness, `--reexec`
 7. **`openrc-init`, `openrc-shutdown`.** One branch per step:
    - [x] `openrc-shutdown`, with `broadcast.c`, `sysvinit.c` and wtmp
-   - [ ] `openrc-init`
+   - [x] `openrc-init`
    - (`halt`/`poweroff`/`reboot`/`shutdown` are shell wrappers around `openrc-shutdown`, installed with `-Dsysvinit=true`: nothing to port)
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over

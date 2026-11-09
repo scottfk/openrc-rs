@@ -207,6 +207,20 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | "you must be root" ends in a blank line (a `\n` inside an einfo message), as does the "Select one of ..." error. | `applets/openrc_shutdown.rs` (`main`) |
 | low | Without openrc-init's FIFO, the command is written to a plain file of that name (`/run/openrc/init.ctl`). | `applets/openrc_shutdown.rs` (`send_cmd`) |
 
+## openrc-init
+
+| Severity | Quirk | Where |
+|---|---|---|
+| **high** | If `openrc` can't be run (missing or not executable), init prints `do_exec: ...` and exits: PID 1 exiting makes the kernel panic. | `applets/openrc_init.rs` (`do_openrc`) |
+| medium | FIFO reads aren't framed: two commands that arrive before init reads (e.g. `reboot` sent twice quickly) are read as one (`rebootreboot`), which matches nothing and is ignored. Anything after a NUL is dropped (`reboot\0junk` reboots), and a command longer than 2047 bytes is read in pieces. | `applets/openrc_init.rs` (`dispatch_fifo`) |
+| low | The "at least half a second" of grace between the final TERM and KILL is cut short by any child exiting: C means to resume the sleep after EINTR, but checks `clock_nanosleep()` for -1 when it returns the error number. Then the 100ms polls end at each SIGCHLD too. | `applets/openrc_init.rs` (`handle_shutdown`) |
+| low | Unknown FIFO commands are printed ("PID1: Received ...") and then silently ignored. "Unknown signal received" can't happen: only INT, TERM and PWR have handlers, and everything else but CHLD is blocked. | `applets/openrc_init.rs` (`dispatch_fifo`, `dispatch_signal`) |
+| low | After `single`, boot runs again with `rc_default_runlevel`, not the runlevel given on the command line. | `applets/openrc_init.rs` (`handle_single`) |
+| low | The single-user shell is waited for with `rc_waitpid` while the SIGCHLD handler also reaps children. If the handler wins, init prints `init: No child processes` (the shell still ran). | `applets/openrc_init.rs` (`run_program`) |
+| low | Output is never flushed before a re-exec or `reboot()`: on a pipe or file, init's own messages are lost. | `applets/openrc_init.rs` (`handle_reexec`, `handle_shutdown`) |
+| low | An empty runlevel argument (`openrc-init ""`) is " is an invalid runlevel". | `applets/openrc_init.rs` (`init`) |
+| low | If the FIFO can't be opened, init prints `open_rwfifo: ...` and goes on with signals only. | `applets/openrc_init.rs` (`main`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
