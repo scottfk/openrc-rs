@@ -147,7 +147,7 @@ extern "C" fn handle_signal(sig: i32) {
 }
 
 /// `expand_home()`: `~` or `~user` at the start of `path`.
-fn expand_home(home: Option<&[u8]>, path: &[u8]) -> Vec<u8> {
+pub(crate) fn expand_home(home: Option<&[u8]>, path: &[u8]) -> Vec<u8> {
     if path.first() != Some(&b'~') {
         return path.to_vec();
     }
@@ -170,7 +170,7 @@ fn expand_home(home: Option<&[u8]>, path: &[u8]) -> Vec<u8> {
 
 /// `sscanf(s, "%d:%d", &a, &b)`: the count (EOF, -1, when `s` has nothing
 /// but white space) and the values matched.
-fn scan_d_colon_d(s: &[u8]) -> (i32, Option<i32>, Option<i32>) {
+pub(crate) fn scan_d_colon_d(s: &[u8]) -> (i32, Option<i32>, Option<i32>) {
     if s.iter().all(|&c| num::is_c_space(c)) {
         return (-1, None, None);
     }
@@ -191,19 +191,19 @@ fn scan_d_colon_d(s: &[u8]) -> (i32, Option<i32>, Option<i32>) {
 
 /// `sscanf(s, "%d%1s", &n, buf) == 1`: an integer and nothing but white
 /// space after it.
-fn scan_int_only(s: &[u8]) -> Option<i32> {
+pub(crate) fn scan_int_only(s: &[u8]) -> Option<i32> {
     let p = num::strtoimax(s, 10);
     (p.end > 0 && s[p.end..].iter().all(|&c| num::is_c_space(c))).then_some(p.value as i32)
 }
 
 /// `sscanf(s, "%u", &n)`.
-fn scan_u32(s: &[u8]) -> Option<u32> {
+pub(crate) fn scan_u32(s: &[u8]) -> Option<u32> {
     let p = num::strtoul(s, 10);
     (p.end > 0).then_some(p.value as u32)
 }
 
 /// `putenv(s)`: glibc removes the variable when there's no `=`.
-fn putenv(s: &[u8]) {
+pub(crate) fn putenv(s: &[u8]) {
     match s.iter().position(|&c| c == b'=') {
         Some(i) => {
             env::set_bytes(&s[..i], &s[i + 1..]);
@@ -216,7 +216,7 @@ fn putenv(s: &[u8]) {
 
 /// `rc_pipe_command()` (rc_exec.c): run `cmd` with `sh -c`, its stdin a
 /// pipe (whose write end is returned) and its output to `devnull`.
-fn rc_pipe_command(cmd: &[u8], devnull: i32) -> i32 {
+pub(crate) fn rc_pipe_command(cmd: &[u8], devnull: i32) -> i32 {
     let mut args = exec::ExecArgs::new([&b"/bin/sh"[..], b"-c", cmd]);
     args.stdin = exec::Redirect::Pipe;
     args.stdout = exec::Redirect::Fd(devnull);

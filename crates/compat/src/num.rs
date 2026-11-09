@@ -116,6 +116,12 @@ pub fn scanf_int(s: &[u8]) -> Option<i32> {
     (p.end > 0).then_some(p.value as i32)
 }
 
+/// `sscanf(s, "%" SCNd64, &n) == 1`.
+pub fn scanf_i64(s: &[u8]) -> Option<i64> {
+    let p = strtoimax(s, 10);
+    (p.end > 0).then_some(p.value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

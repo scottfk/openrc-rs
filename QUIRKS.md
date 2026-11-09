@@ -185,6 +185,18 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A `forever` in a retry schedule waits for as long as the processes live; the items after it are only reached once they're gone. | `schedules.rs` (`run_stop_schedule`) |
 | low | With `-v`, `--stop` prints ` [ ok ]` for every 20ms poll that finds the processes still there (`do_stop()` with signal 0 still calls `eendv()`), so a slow-to-die daemon gives a screenful of them. | `schedules.rs` (`do_stop`) |
 
+## supervise-daemon
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | When a health check fails, killing the daemon always takes the retry schedule's whole timeout (5s by default): the SIGCHLD handler leaves the daemon unreaped for the main loop, and its zombie still counts as running. | `applets/supervise_daemon.rs` (`handle_signal`, `supervisor`) |
+| low | The health check commands (`healthcheck`, `unhealthy`) run with almost every signal blocked: "unmasking" after the fork restores the supervisor's own mask. | `applets/supervise_daemon.rs` (`exec_command`) |
+| medium | The supervisor can miss its daemon's death and not respawn it: the main loop only notices when the SIGCHLD interrupts its blocking `open()` of the control FIFO. If the signal arrives at any other moment (a daemon that dies straight after starting, or one killed through `--signal`, while the supervisor is between FIFO opens), the loop goes back into `open()` and waits there until the next signal or FIFO command. | `applets/supervise_daemon.rs` (`supervisor`) |
+| low | Until it's exiting, the SIGCHLD handler reaps nothing: it asks `waitpid()` for `WNOWAIT`, which only `waitid()` accepts, so the call fails with EINVAL. (Other children are reaped where they're waited for.) | `applets/supervise_daemon.rs` (`handle_signal`) |
+| low | `-P` isn't in the short options, so only `--respawn-period` works. | `applets/supervise_daemon.rs` |
+| low | `--reexec` doesn't read back `respawn_period` (it uses the 12s default), and crashes if a value it needs (`argc`, `child_pid`, `respawn_*`) is missing. | `applets/supervise_daemon.rs` (`main`) |
+| low | `--stop` leaves the `argv_N`, `argc` and `exec` values behind. | `applets/supervise_daemon.rs` (`main`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.

@@ -8,16 +8,17 @@
 //! whether it's a session leader.  It writes `out` to stdout and `err` to
 //! stderr.  Then `$FAKE_MODE` says what it does:
 //!
-//! - `run` (default): wait to be killed.
+//! - `run` (default): wait to be killed; SIGUSR2 makes it exit 0.3s later.
 //! - `fork`: fork; the child writes its pid to `$FAKE_PIDFILE` (if set)
 //!   and waits; the parent exits 0 (a classic self-daemonizing daemon).
 //! - `exit:N`: exit with status N.
+//! - `slow-exit:N`: exit with status N after 0.3s.
 //! - `stubborn`: ignore SIGTERM, then wait.
 //! - `notify-fd:N`: write "ready\n" to fd N, then wait.
 //! - `notify-socket`: send READY=1 to `$NOTIFY_SOCKET`, then wait.
 //! - `fork-die`: like `fork`, but the child exits after 50ms.
 //! - `notify-partial`: write "not ready" (no newline) to fd 4, exit after
-//!   0.2s.
+//!   0.4s.
 //! - `slowexit`: exit 0 after 0.5s.
 //! - `stubborn-slowexit`: ignore SIGTERM and SIGHUP, exit 0 after 0.5s.
 
@@ -100,6 +101,8 @@ static void report(FILE *f, int argc, char **argv)
 }
 
 static void wait_forever(void) { for (;;) pause(); }
+/* SIGUSR2 ends the daemon 0.3s later (see diff_supervise_daemon.rs). */
+static void late_exit(int sig) { (void)sig; usleep(300000); _exit(0); }
 
 int main(int argc, char **argv)
 {
@@ -125,9 +128,10 @@ int main(int argc, char **argv)
 		if (fork() == 0) { usleep(50000); return 0; }
 		return 0;
 	}
+	if (!strncmp(mode, "slow-exit:", 10)) { usleep(300000); return atoi(mode + 10); }
 	if (!strcmp(mode, "notify-partial")) {
 		if (write(4, "not ready", 9) < 0) return 9;
-		usleep(200000);
+		usleep(400000);
 		return 0;
 	}
 	if (!strncmp(mode, "exit:", 5))
@@ -151,6 +155,7 @@ int main(int argc, char **argv)
 		sendto(s, "READY=1", 7, 0, (struct sockaddr *)&a, sizeof(a));
 		wait_forever();
 	}
+	signal(SIGUSR2, late_exit);
 	wait_forever();
 }
 "#;
