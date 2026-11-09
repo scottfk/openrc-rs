@@ -118,5 +118,10 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
    - [x] `openrc-init`
    - (`halt`/`poweroff`/`reboot`/`shutdown` are shell wrappers around `openrc-shutdown`, installed with `-Dsysvinit=true`: nothing to port)
 
+8. **What Gentoo's `USE="pam"` builds, and the rest of upstream's install set.** One branch per step:
+   - [x] `rc-abort`, `rc-environ`, `sysv-initctl`
+   - [ ] PAM: sessions in `start-stop-daemon`/`supervise-daemon`, `openrc-user`, `pam_openrc.so`
+   - [ ] a live Gentoo ebuild, rehearsed in the VM with a desktop's USE flags
+
 Until phase 7 is done and tested in a VM, nothing here should be installed over
 a real system's OpenRC.

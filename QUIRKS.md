@@ -221,6 +221,13 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | An empty runlevel argument (`openrc-init ""`) is " is an invalid runlevel". | `applets/openrc_init.rs` (`init`) |
 | low | If the FIFO can't be opened, init prints `open_rwfifo: ...` and goes on with signals only. | `applets/openrc_init.rs` (`main`) |
 
+## rc-environ
+
+| Severity | Quirk | Where |
+|---|---|---|
+| low | A variable name matches any re-export it's a prefix of (`strncmp` over the name's length): `rc-environ svc FO=x` saves `FO` when `svc` re-exports `FOO`, and an empty name (`=x`) matches every re-export. | `applets/rc_environ.rs` (`set_environment`) |
+| low | The program never sets its name, so `-V` prints `(null) (OpenRC) ...`, and a variable that can't be read is reported as `(null): failed to read variable ...`. | `applets/rc_environ.rs` |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -303,3 +310,11 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **libeinfo's `errno`:** its `yesno()` now sets `errno` the way C's does
   (ENOENT when unset, EINVAL when unrecognised), so programs that look at
   `errno` after an `e*v()` call see the same value.
+- **`rc-environ` on C's crashing paths:** saving a variable from an unset
+  environment variable (`rc-environ svc NAME` with `NAME` unset) makes C
+  pass NULL to `fputs()` after creating the file; we leave it empty. When
+  the deptree can't be loaded at all, C dereferences NULL; we see no
+  re-exports.
+- **`sysv-initctl` with an unknown runlevel** (anything but 0-6, S, Q, U
+  in either case): C sends an uninitialised pointer as the command
+  (undefined behaviour); we send nothing.
