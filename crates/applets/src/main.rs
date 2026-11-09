@@ -8,6 +8,7 @@
 mod applets;
 mod plugin;
 mod rc_logger;
+mod schedules;
 mod shared;
 
 use std::os::unix::ffi::OsStringExt;

@@ -97,7 +97,9 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
 5. **`openrc`**, the runlevel engine. One branch per step:
    - [x] runlevel changes: options (`-n`, `-o`, `-s`, `-S`), the krunlevel override, stopping what isn't wanted, starting the stacked runlevels, crashed daemons, plugins, signals, `rc_parallel`
    - [x] the `rc.log` logger, `sysinit` (banner, `init.sh`, kernel command line), interactive boot; installed as `$sbindir/openrc`
-6. **`start-stop-daemon`, `supervise-daemon`**
+6. **`start-stop-daemon`, `supervise-daemon`.** One branch per step:
+   - [x] `start-stop-daemon`, with `schedules.c`, capabilities (no libcap) and readiness notification
+   - [ ] `supervise-daemon`
 7. **`openrc-init`, `openrc-shutdown`**, plus `halt`/`poweroff`/`reboot`/`shutdown`.
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over

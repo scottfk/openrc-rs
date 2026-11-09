@@ -161,21 +161,37 @@ fn leak(bytes: Vec<u8>) -> &'static CStr {
 }
 
 /// libeinfo's private `yesno()`: unlike librc's, it also accepts on/off.
-/// Returns (value, recognised).
+/// Returns (value, recognised).  Like C it sets errno: ENOENT for an unset
+/// value, EINVAL for one that's neither yes nor no.  Callers can see this:
+/// start-stop-daemon tests errno after an `ewarnv()`, for one.
 fn yesno(value: Option<&[u8]>) -> (bool, bool) {
-    let Some(v) = value else { return (false, false) };
+    use openrc_compat::sys::{libc, set_errno};
+    let Some(v) = value else {
+        set_errno(libc::ENOENT);
+        return (false, false);
+    };
     let is = |w: &str| v.eq_ignore_ascii_case(w.as_bytes());
     if ["yes", "y", "true", "on", "1"].iter().any(|w| is(w)) {
         return (true, true);
     }
     let recognised = ["no", "n", "false", "off", "0"].iter().any(|w| is(w));
+    if !recognised {
+        set_errno(libc::EINVAL);
+    }
     (false, recognised)
 }
 
-/// `noyes()`: true only for an explicit no/n/false/off/0.
+/// `noyes()`: true only for an explicit no/n/false/off/0.  errno is kept
+/// for those, and left as `yesno()` set it otherwise.
 fn noyes(value: Option<&[u8]>) -> bool {
+    use openrc_compat::sys::{Errno, set_errno};
+    let saved = Errno::last().0;
+    set_errno(0);
     match yesno(value) {
-        (v, true) => !v,
+        (v, true) => {
+            set_errno(saved);
+            !v
+        }
         (v, false) => v,
     }
 }

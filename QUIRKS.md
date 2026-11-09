@@ -171,6 +171,20 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | For user services the log directory is made with a `mkpath()` that calls `mkdir()` on the whole path each time instead of on each parent, so only the last directory is ever created: with `~/.local` missing, the log can't be written. | `rc_logger.rs` (`logger`) |
 | low | Whether the temporary log is removed depends on a stale `errno` (`EROFS`) as well as the runlevel. | `rc_logger.rs` (`logger`) |
 
+## start-stop-daemon
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | A pidfile that can't be opened, or holds no pid, is treated as missing unless verbose. `get_pid()` warns with `ewarnv()`, and libeinfo's `yesno()` (checking `EINFO_VERBOSE`) sets `errno` to ENOENT, which `--stop` takes to mean "no pidfile" and carries on matching by name. With `-v` it fails instead. | `shared.rs` (`get_pid`), `einfo/lib.rs` (`yesno`) |
+| medium | With only `--name` (no `--exec` and no arguments), `*argv = name` overwrites the NULL ending argv, so the daemon is started with the whole environment as further arguments. The `PATH=` among them shows only the first directory, because PATH is later cut up in place. | `applets/start_stop_daemon.rs` (`main`, `Child::run`) |
+| low | An invalid `SSD_IONICELEVEL` is reported but still used: the class (-1) is shifted to -8192, `ioprio_set` fails, and the daemon isn't started. | `applets/start_stop_daemon.rs` (`main`) |
+| low | `--test` without `--nicelevel` says "with a priority of -2147483648": the unset level is INT_MIN and only 0 is skipped. | `applets/start_stop_daemon.rs` (`main`) |
+| low | `--ionice ""` is accepted (`sscanf` returns EOF, -1, and only 0 is an error). | `applets/start_stop_daemon.rs` (`main`) |
+| low | When `--scheduler` can't be set, the message shows a stale `errno`: `pthread_setschedparam()` returns its error instead of setting it. | `applets/start_stop_daemon.rs` (`Child::run`) |
+| low | `--stop-group` signals the process group whose id is the daemon's pid, which only exists if the daemon leads its own group; otherwise the kill fails with ESRCH, which counts as success, and the daemon "refuses to stop". | `schedules.rs` (`do_stop`) |
+| low | A `forever` in a retry schedule waits for as long as the processes live; the items after it are only reached once they're gone. | `schedules.rs` (`run_stop_schedule`) |
+| low | With `-v`, `--stop` prints ` [ ok ]` for every 20ms poll that finds the processes still there (`do_stop()` with signal 0 still calls `eendv()`), so a slow-to-die daemon gives a screenful of them. | `schedules.rs` (`do_stop`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
@@ -244,3 +258,12 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **The logger reading its pty:** if `read()` fails, C uses its -1 as a
   length (writing garbage and then crashing the logger); here nothing is
   written.
+- **Capabilities without libcap:** `--capabilities`, `--secbits` and
+  changing user keep capabilities through our own port of the libcap 2.78
+  calls start-stop-daemon makes (`cap_iab_from_text()`,
+  `cap_iab_set_proc()`, `cap_setuid()`, `cap_set_secbits()`), on the raw
+  syscalls. libcap is threaded-program aware and, if a program installs
+  its own syscall functions, uses them; neither applies here.
+- **libeinfo's `errno`:** its `yesno()` now sets `errno` the way C's does
+  (ENOENT when unset, EINVAL when unrecognised), so programs that look at
+  `errno` after an `e*v()` call see the same value.

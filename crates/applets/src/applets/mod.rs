@@ -16,6 +16,7 @@ pub mod rc_update;
 pub mod seedrng;
 pub mod service;
 pub mod shell_var;
+pub mod start_stop_daemon;
 pub mod swclock;
 pub mod value;
 
@@ -134,6 +135,7 @@ pub const APPLETS: &[Applet] = &[
     bin("rc-status", rc_status::main),
     sbin("openrc-run", openrc_run::main),
     sbin("openrc", openrc::main),
+    sbin("start-stop-daemon", start_stop_daemon::main),
     rc_sbin("swclock", swclock::main),
 ];
 

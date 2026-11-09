@@ -12,6 +12,7 @@
 # 20261108 - Add openrc-run stop/restart/condrestart/pause; openrc-run is now installed, so call it directly - Claude - scottfk
 # 20261108 - Add openrc (ours through the multi-call binary when swapped in, as it isn't installed yet) - Claude - scottfk
 # 20261108 - openrc is installed now: call it directly; add an rc_logger run - Claude - scottfk
+# 20261109 - Add start-stop-daemon: test mode, user/group change, umask, nice, capabilities, stop by pidfile - Claude - scottfk
 export TERM=xterm COLUMNS=100
 run() { echo "### $*"; script -qec "$*" /dev/null 2>&1; echo "### exit $?"; }
 run rc-status
@@ -114,3 +115,8 @@ run '$RC; echo r=$?; $RC default; echo d=$?; rc-status -r'
 run '/etc/init.d/local stop >/dev/null; $RC -n default; echo n=$?; rc-service local status; /etc/init.d/local stop >/dev/null; $RC; rc-service local status'
 run 'RC_BOOTLEVEL=boot $RC -o default; echo o=$?; cat /run/openrc/krunlevel; echo; $RC; echo k=$?; ls /run/openrc/krunlevel 2>&1; rm -f /run/openrc/krunlevel'
 run 'cp /etc/rc.conf /tmp/rc.conf.ex; echo rc_logger=YES >> /etc/rc.conf; /etc/init.d/local stop >/dev/null; $RC; echo l=$?; cp /tmp/rc.conf.ex /etc/rc.conf; tail -n +2 /var/log/rc.log | tail -6 | sed "s/ at .*//"'
+SSD=/sbin/start-stop-daemon
+export SSD
+run '$SSD -t -S -x /bin/sleep -- 30; $SSD -t -K -x /bin/sleep; echo t=$?; $SSD -K -x /bin/nosuch; echo n=$?'
+run '$SSD -S -b -m -p /run/ex-sleep.pid -u nobody:nobody -k 027 -N 3 -x /bin/sleep -- 30; echo s=$?; sleep 0.3; ps -o user=,group=,ni=,args= -p $(cat /run/ex-sleep.pid); $SSD -S -p /run/ex-sleep.pid -x /bin/sleep; echo again=$?; $SSD -K -p /run/ex-sleep.pid; echo k=$?; ls /run/ex-sleep.pid 2>&1'
+run '$SSD -S -b -m -p /run/ex-cap.pid -u nobody --capabilities ^cap_net_bind_service,!cap_sys_admin -x /bin/sleep -- 30; sleep 0.3; grep -E "^(Cap(Inh|Amb|Bnd)|Uid)" /proc/$(cat /run/ex-cap.pid)/status; $SSD -K -R TERM/2 -p /run/ex-cap.pid; echo k=$?'

@@ -525,6 +525,136 @@ pub fn exec_service(service: &[u8], arg: &[u8]) -> i32 {
     pid
 }
 
+/// `get_pid()` (misc.c): the pid in `pidfile` (fscanf "%d"), or -1 with a
+/// verbose warning.  errno is left as the warning leaves it (see below).
+pub fn get_pid(applet: &[u8], pidfile: Option<&[u8]>) -> i32 {
+    use openrc_compat::sys;
+    let Some(pidfile) = pidfile else { return -1 };
+    let data = match std::fs::read(openrc_compat::bytes::as_path(pidfile)) {
+        Ok(d) => d,
+        Err(e) => {
+            let e = sys::Errno(e.raw_os_error().unwrap_or(0));
+            // fopen's errno, which ewarnv() then replaces (ENOENT, unless
+            // verbose): QUIRK, so a pidfile that can't be read for any
+            // reason looks missing to start-stop-daemon.
+            sys::set_errno(e.0);
+            openrc_einfo::ewarnv(Some(&bcat!(applet, ": fopen `", pidfile, "': ", e.strerror())));
+            return -1;
+        }
+    };
+    match openrc_compat::num::scanf_int(&data) {
+        Some(pid) => pid,
+        None => {
+            openrc_einfo::ewarnv(Some(&bcat!(applet, ": no pid found in `", pidfile, "'")));
+            -1
+        }
+    }
+}
+
+/// `struct notify` (misc.h): how a daemon tells us it's ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Notify {
+    #[default]
+    None,
+    /// `fd:N`: the daemon writes a line to fd N (a pipe: `(read, write)`).
+    Fd { fd: i32, pipe: (i32, i32) },
+    /// `socket:ready`: the daemon sends `READY=1` to `$NOTIFY_SOCKET`.
+    Socket { fd: i32 },
+}
+
+fn notify_socket_path(applet: &[u8]) -> Vec<u8> {
+    bcat!(rc::svcdir::rc_svcdir(), "/supervise-", applet, ".sock")
+}
+
+/// `notify_parse()` (misc.c).  (QUIRK: an invalid value is reported from
+/// getopt's `optarg`, which is the same string here.)
+pub fn notify_parse(applet: &[u8], s: &[u8]) -> Notify {
+    use openrc_compat::sys;
+    use openrc_einfo::eerrorx;
+    // sscanf(s, "fd:%d", &fd)
+    if let Some(rest) = s.strip_prefix(b"fd:")
+        && let Some(fd) = openrc_compat::num::scanf_int(rest)
+    {
+        return match sys::pipe_raw() {
+            Ok(pipe) => Notify::Fd { fd, pipe },
+            Err(e) => eerrorx(Some(&bcat!(applet, ": pipe: ", e.strerror()))),
+        };
+    }
+    if s.starts_with(b"socket") {
+        let Some(opts) = s.iter().position(|&c| c == b':').map(|i| &s[i + 1..]) else { return Notify::None };
+        if opts != b"ready" {
+            return Notify::None;
+        }
+        let path = notify_socket_path(applet);
+        if path.len() >= sys::SUN_PATH_LEN {
+            eerrorx(Some(&bcat!(
+                applet,
+                ": socket path '",
+                rc::svcdir::rc_svcdir(),
+                "/supervise-",
+                applet,
+                ".sock' too long."
+            )));
+        }
+        env::set("NOTIFY_SOCKET", &path);
+        return match sys::unix_dgram_bind(&path) {
+            Ok(fd) => Notify::Socket { fd },
+            Err((what, e)) => eerrorx(Some(&bcat!(applet, ": ", what, ": ", e.strerror()))),
+        };
+    }
+    eerrorx(Some(&bcat!(applet, ": invalid ready '", s, "'.")))
+}
+
+/// `notify_wait()` (misc.c): wait for the daemon to say it's ready; false
+/// if it closed the pipe (or a read failed).
+pub fn notify_wait(applet: &[u8], notify: Notify) -> bool {
+    use openrc_compat::sys;
+    let fd = match notify {
+        Notify::None => return true,
+        Notify::Fd { pipe, .. } => {
+            sys::close_raw(pipe.1);
+            pipe.0
+        }
+        Notify::Socket { fd } => fd,
+    };
+    const BUFSIZ: usize = 8192;
+    let mut buf = vec![0u8; BUFSIZ];
+    loop {
+        let bytes = sys::read_raw(fd, &mut buf);
+        if bytes == 0 {
+            return false;
+        }
+        if bytes < 0 {
+            let e = sys::Errno::last();
+            if e.0 != sys::libc::EINTR {
+                // (C's message ends in a newline of its own.)
+                openrc_einfo::eerror(Some(&bcat!(applet, ": read failed '", e.strerror(), "'\n")));
+                return false;
+            }
+            continue;
+        }
+        let got = &buf[..bytes as usize];
+        match notify {
+            Notify::Fd { .. } => {
+                if got.contains(&b'\n') {
+                    return true;
+                }
+            }
+            Notify::Socket { .. } => {
+                // QUIRK: C writes a NUL after the data, one byte past its
+                // buffer on a full read; and looks for READY=1 only up to
+                // the first NUL.
+                let text = openrc_compat::bytes::c_str_prefix(got);
+                if text.windows(7).any(|w| w == b"READY=1") {
+                    let _ = sys::unlink(&notify_socket_path(applet));
+                    return true;
+                }
+            }
+            Notify::None => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1106,3 +1106,199 @@ pub fn fd_flags(fd: i32) -> i32 {
     // SAFETY: fcntl on an int fd; a bad fd just fails.
     unsafe { libc::fcntl(fd, libc::F_GETFD, 0) }
 }
+
+// --- start-stop-daemon / supervise-daemon ------------------------------------
+
+/// `setsid()`, errors ignored (as in C).
+pub fn setsid() {
+    // SAFETY: plain syscall.
+    unsafe { libc::setsid() };
+}
+
+/// `setpriority(PRIO_PROCESS, pid, prio)`.
+pub fn setpriority(pid: i32, prio: i32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, prio) }).map(drop)
+}
+
+/// `syscall(SYS_ioprio_set, which, who, ioprio)`.
+pub fn ioprio_set(which: i32, who: i32, ioprio: i32) -> Result<(), Errno> {
+    // SAFETY: plain syscall with integer arguments.
+    let r = unsafe { libc::syscall(libc::SYS_ioprio_set, which, who, ioprio) };
+    if r < 0 { Err(Errno::last()) } else { Ok(()) }
+}
+
+/// `chroot(path)`.
+pub fn chroot(path: &[u8]) -> Result<(), Errno> {
+    let p = to_cstring(path);
+    // SAFETY: valid C string.
+    cvt(unsafe { libc::chroot(p.as_ptr()) }).map(drop)
+}
+
+/// `setgid(gid)`.
+pub fn setgid(gid: u32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::setgid(gid) }).map(drop)
+}
+
+/// `setuid(uid)`.
+pub fn setuid(uid: u32) -> Result<(), Errno> {
+    // SAFETY: plain syscall.
+    cvt(unsafe { libc::setuid(uid) }).map(drop)
+}
+
+/// `setgroups(n, list)`.
+pub fn setgroups(list: &[u32]) -> Result<(), Errno> {
+    // SAFETY: list is valid for its length.
+    cvt(unsafe { libc::setgroups(list.len(), list.as_ptr()) }).map(drop)
+}
+
+/// `getgrouplist(user, gid, ...)`: C's two tries (32 groups, then the
+/// size it was told), None if the second fails too.
+pub fn getgrouplist(user: &[u8], gid: u32) -> Option<Vec<u32>> {
+    let u = to_cstring(user);
+    let mut n: libc::c_int = 32;
+    let mut buf = vec![0 as libc::gid_t; 32];
+    // SAFETY: buf has room for n gids; getgrouplist updates n.
+    if unsafe { libc::getgrouplist(u.as_ptr(), gid, buf.as_mut_ptr(), &mut n) } < 0 {
+        buf = vec![0; n.max(0) as usize];
+        // SAFETY: as above, with the size getgrouplist asked for.
+        if unsafe { libc::getgrouplist(u.as_ptr(), gid, buf.as_mut_ptr(), &mut n) } < 0 {
+            return None;
+        }
+    }
+    buf.truncate(n.max(0) as usize);
+    Some(buf)
+}
+
+/// `endpwent()`.
+pub fn endpwent() {
+    // SAFETY: plain libc call.
+    unsafe { libc::endpwent() };
+}
+
+/// `pthread_setschedparam(pthread_self(), policy, {prio})`: Ok or the
+/// error number it returned.
+pub fn set_scheduler(policy: i32, prio: i32) -> Result<(), Errno> {
+    let p = libc::sched_param { sched_priority: prio };
+    // SAFETY: p is valid; pthread_self is always valid.
+    let r = unsafe { libc::pthread_setschedparam(libc::pthread_self(), policy, &p) };
+    if r != 0 { Err(Errno(r)) } else { Ok(()) }
+}
+
+/// `sched_get_priority_min(policy)`.
+pub fn sched_get_priority_min(policy: i32) -> i32 {
+    // SAFETY: plain syscall.
+    unsafe { libc::sched_get_priority_min(policy) }
+}
+
+/// `sched_setparam(pid, {prio})`.
+pub fn sched_setparam(pid: i32, prio: i32) -> Result<(), Errno> {
+    let p = libc::sched_param { sched_priority: prio };
+    // SAFETY: p is valid.
+    cvt(unsafe { libc::sched_setparam(pid, &p) }).map(drop)
+}
+
+/// `open(path, flags, mode)` on a raw fd.
+pub fn open_raw(path: &[u8], flags: i32, mode: u32) -> Result<i32, Errno> {
+    let p = to_cstring(path);
+    // SAFETY: valid C string.
+    cvt(unsafe { libc::open(p.as_ptr(), flags, mode as libc::c_uint) })
+}
+
+/// `xopen_nonblock()` (helpers.h): open with O_NONBLOCK (so a FIFO without
+/// a reader doesn't hang), then set the file status flags to `flags`.
+pub fn xopen_nonblock(path: &[u8], flags: i32, mode: u32) -> Result<i32, Errno> {
+    let fd = open_raw(path, flags | libc::O_NONBLOCK, mode)?;
+    // SAFETY: fcntl on our fd.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        let e = Errno::last();
+        close_raw(fd);
+        return Err(e);
+    }
+    Ok(fd)
+}
+
+/// `cloexec_fds_from(first)`: FD_CLOEXEC on every fd from `first` up.
+pub fn cloexec_fds_from(first: i32) {
+    const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
+    // SAFETY: close_range only changes fd flags.
+    let r = unsafe { libc::syscall(libc::SYS_close_range, first as u32, u32::MAX, CLOSE_RANGE_CLOEXEC) };
+    if r < 0 {
+        // SAFETY: getdtablesize and fcntl on int fds; bad fds just fail.
+        unsafe {
+            let mut i = libc::getdtablesize() - 1;
+            while i >= first {
+                libc::fcntl(i, libc::F_SETFD, libc::FD_CLOEXEC);
+                i -= 1;
+            }
+        }
+    }
+}
+
+/// `ioctl(fd, TIOCNOTTY, 0)`, errors ignored.
+pub fn tiocnotty(fd: i32) {
+    // SAFETY: TIOCNOTTY takes no argument; a bad fd just fails.
+    unsafe { libc::ioctl(fd, libc::TIOCNOTTY, 0) };
+}
+
+/// `pipe(fds)` (no flags): `(read end, write end)` as raw fds.
+pub fn pipe_raw() -> Result<(i32, i32), Errno> {
+    let mut fds = [0; 2];
+    // SAFETY: fds has room for two fds.
+    cvt(unsafe { libc::pipe(fds.as_mut_ptr()) })?;
+    Ok((fds[0], fds[1]))
+}
+
+/// A Unix datagram socket bound to `path` (which must fit in
+/// `sun_path`), as a raw fd.  Errors are `("socket"|"bind", errno)`.
+pub fn unix_dgram_bind(path: &[u8]) -> Result<i32, (&'static str, Errno)> {
+    // SAFETY: plain syscalls; addr is zeroed and the path fits (checked by
+    // the caller, and copied with a bound here).
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0);
+        if fd < 0 {
+            return Err(("socket", Errno::last()));
+        }
+        let mut addr: libc::sockaddr_un = std::mem::zeroed();
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (d, &s) in addr.sun_path.iter_mut().zip(path) {
+            *d = s as libc::c_char;
+        }
+        let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        if libc::bind(fd, (&addr as *const libc::sockaddr_un).cast(), len) < 0 {
+            return Err(("bind", Errno::last()));
+        }
+        Ok(fd)
+    }
+}
+
+/// The size of `sockaddr_un.sun_path`.
+pub const SUN_PATH_LEN: usize = 108;
+
+/// `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)`.
+pub fn set_no_new_privs() -> Result<(), Errno> {
+    // SAFETY: prctl with integer arguments only.
+    cvt(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1u64, 0u64, 0u64, 0u64) }).map(drop)
+}
+
+/// `waitpid(pid, &status, flags)` returning the raw result (pid, 0 or -1)
+/// and the status.
+pub fn waitpid_raw(pid: i32, flags: i32) -> (i32, i32) {
+    let mut status = 0;
+    // SAFETY: status is a valid int.
+    let r = unsafe { libc::waitpid(pid, &mut status, flags) };
+    (r, status)
+}
+
+/// `getdtablesize()`.
+pub fn getdtablesize() -> i32 {
+    // SAFETY: plain libc call.
+    unsafe { libc::getdtablesize() }
+}
+
+/// `fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC)`; false on error.
+pub fn clear_cloexec(fd: i32, flags: i32) -> bool {
+    // SAFETY: fcntl on an int fd.
+    unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != -1 }
+}
