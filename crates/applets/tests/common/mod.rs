@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 
+pub mod fakedaemon;
 pub mod run;
 pub mod system;
 
@@ -118,7 +119,7 @@ pub struct Case {
     /// Run in a private user + mount namespace (see [`Ns`]).
     pub ns: Option<Ns>,
     /// Run as PID 1 of a fresh user + PID namespace (with its own /proc),
-    /// after this bash prelude has run there.  For programs that signal
+    /// after this bash prelude (`$ROOT` expanded) has run there.  For programs that signal
     /// "every process" (kill_all): nothing outside the namespace is visible.
     pub pidns: Option<&'static str>,
 }
@@ -296,7 +297,7 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
             // execs the program (which becomes PID 1) under argv[0].
             let mut c = Command::new("/usr/bin/unshare");
             c.args(["--user", "--map-root-user", "--pid", "--fork", "--mount", "--mount-proc", "/bin/bash", "-c"]);
-            c.arg(format!("{prelude}\nexec -a {} \"$0\" \"$@\"", case.applet));
+            c.arg(format!("{}\nexec -a {} \"$0\" \"$@\"", prelude.replace("$ROOT", &root_s), case.applet));
             c.arg(bin);
             c
         }
