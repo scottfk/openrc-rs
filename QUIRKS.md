@@ -197,6 +197,16 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `--reexec` doesn't read back `respawn_period` (it uses the 12s default), and crashes if a value it needs (`argc`, `child_pid`, `respawn_*`) is missing. | `applets/supervise_daemon.rs` (`main`) |
 | low | `--stop` leaves the `argv_N`, `argc` and `exec` values behind. | `applets/supervise_daemon.rs` (`main`) |
 
+## openrc-shutdown
+
+| Severity | Quirk | Where |
+|---|---|---|
+| **high** | `--dry-run` only stops what goes to openrc-init's FIFO. When `/run/initctl` exists (sysvinit), `openrc-shutdown -D -r now` (or `-p`, `-H`, `-s`) really sends sysvinit the runlevel change: the system reboots or powers off. It also still broadcasts the warning and waits out the delay. | `applets/openrc_shutdown.rs` (`main`) |
+| low | Without a terminal on stdin, the broadcast header says `root@host (null)(date)`: the missing tty name is a NULL passed to `%s`. | `applets/openrc_shutdown.rs` (`broadcast`) |
+| low | The terminals that mustn't be opened (printers, tapes...) are recognised by the major number of `st_dev`, the filesystem holding the device node, instead of `st_rdev`, so none ever is. | `applets/openrc_shutdown.rs` (`file_isatty`) |
+| low | "you must be root" ends in a blank line (a `\n` inside an einfo message), as does the "Select one of ..." error. | `applets/openrc_shutdown.rs` (`main`) |
+| low | Without openrc-init's FIFO, the command is written to a plain file of that name (`/run/openrc/init.ctl`). | `applets/openrc_shutdown.rs` (`send_cmd`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.
