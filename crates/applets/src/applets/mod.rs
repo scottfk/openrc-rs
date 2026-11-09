@@ -11,7 +11,9 @@ pub mod openrc;
 pub mod openrc_init;
 pub mod openrc_run;
 pub mod openrc_shutdown;
+pub mod rc_abort;
 pub mod rc_depend;
+pub mod rc_environ;
 pub mod rc_service;
 pub mod rc_status;
 pub mod rc_update;
@@ -21,6 +23,7 @@ pub mod shell_var;
 pub mod start_stop_daemon;
 pub mod supervise_daemon;
 pub mod swclock;
+pub mod sysv_initctl;
 pub mod value;
 
 /// Where upstream installs a program (relative to the prefix).
@@ -139,10 +142,13 @@ pub const APPLETS: &[Applet] = &[
     sbin("openrc-run", openrc_run::main),
     sbin("openrc", openrc::main),
     sbin("openrc-init", openrc_init::main),
+    rc_sbin("sysv-initctl", sysv_initctl::main),
     sbin("openrc-shutdown", openrc_shutdown::main),
     sbin("start-stop-daemon", start_stop_daemon::main),
     sbin("supervise-daemon", supervise_daemon::main),
     rc_sbin("swclock", swclock::main),
+    rc_sbin("rc-abort", rc_abort::main),
+    bin("rc-environ", rc_environ::main),
 ];
 
 pub fn find(name: &[u8]) -> Option<&'static Applet> {

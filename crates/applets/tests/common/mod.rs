@@ -553,6 +553,8 @@ impl SyslogCapture {
                 (Some(gt), Some(end), Some(lb)) if gt + 16 <= lb => {
                     format!("{} {}[PID]{}", &m[..=gt], &m[gt + 16..lb], &m[end + 1..])
                 }
+                // Without LOG_PID: just the timestamp ("Nov  9 18:06:43 ").
+                (Some(gt), None, _) if m.len() >= gt + 17 => format!("{} {}", &m[..=gt], &m[gt + 17..]),
                 _ => m,
             };
             out.push(norm);
