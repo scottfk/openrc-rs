@@ -183,6 +183,7 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | When `--scheduler` can't be set, the message shows a stale `errno`: `pthread_setschedparam()` returns its error instead of setting it. | `applets/start_stop_daemon.rs` (`Child::run`) |
 | low | `--stop-group` signals the process group whose id is the daemon's pid, which only exists if the daemon leads its own group; otherwise the kill fails with ESRCH, which counts as success, and the daemon "refuses to stop". | `schedules.rs` (`do_stop`) |
 | low | A `forever` in a retry schedule waits for as long as the processes live; the items after it are only reached once they're gone. | `schedules.rs` (`run_stop_schedule`) |
+| low | A stop schedule's timeouts (`--retry TERM/5`, supervise-daemon's `-R`) count polls, not time: each second is 50 rounds of "check, sleep 20ms", so slow checks stretch it (a 1-second timeout took up to 5.5s on the loaded test VM, in C as in ours). | `schedules.rs` (`run_stop_schedule`) |
 | low | With `-v`, `--stop` prints ` [ ok ]` for every 20ms poll that finds the processes still there (`do_stop()` with signal 0 still calls `eendv()`), so a slow-to-die daemon gives a screenful of them. | `schedules.rs` (`do_stop`) |
 
 ## supervise-daemon

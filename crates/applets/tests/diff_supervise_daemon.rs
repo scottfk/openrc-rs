@@ -224,35 +224,47 @@ fn supervise_run() {
             "sleep 1.25; sd svc -p \"$P\" -K; [ $(runs) -ge 2 ] && echo respawning",
         )),
         // Health checks: the first fails (unhealthy, killed, respawned),
-        // the next passes.  The kill waits out the retry timeout (QUIRK:
+        // the next ones pass.  The kill waits out the retry timeout (QUIRK:
         // the killed daemon stays a zombie), so -R 1.
         timed(prelude!(
-            "sd svc -p \"$P\" -A 1 -a 100 -R 1 -S \"$D\"",
-            // (check at 1s, the kill's 1s, the respawn, the next check 1s
-            // later: about 3.3s, with plenty of room for a slow machine.)
-            "sleep 6; echo \"unhealthy: $(grep -c ^unhealthy \"$HC_LOG\")\"",
+            // (-a 1: if the daemon is still dying when the kill gives up,
+            // its SIGCHLD can be lost, the upstream race; the next check's
+            // alarm then wakes the supervisor.)
+            "sd svc -p \"$P\" -A 1 -a 1 -R 1 -S \"$D\"",
+            // (Check at 1s, the kill's "1s", the respawn, the next check 1s
+            // later.  QUIRK: the kill's timeout counts 50 polls, so it
+            // stretches on a slow machine (5s seen on the VM): wait for the
+            // respawn, then a little for the next check.)
+            "i=0; while [ $(runs) -lt 2 ] && [ $i -lt 200 ]; do sleep 0.1; i=$((i+1)); done; sleep 1.5",
+            "echo \"unhealthy: $(grep -c ^unhealthy \"$HC_LOG\")\"",
             "[ $(runs) -ge 2 ] && echo respawned; sd svc -p \"$P\" -K",
         )),
         sd(prelude!(
-            "HC_OK=1 sd svc -p \"$P\" -a 1 -S \"$D\"",
-            "sleep 1.5; sd svc -p \"$P\" -K; echo \"runs: $(runs)\"",
+            // (Checks at 2s and 4s: one before the stop.)
+            "HC_OK=1 sd svc -p \"$P\" -a 2 -S \"$D\"",
+            "sleep 3; sd svc -p \"$P\" -K; echo \"runs: $(runs)\"",
         )),
         // Respawn timing, counted at fixed points well apart: a delay of
-        // 1s; a step of 1s per respawn; a 2s step capped at 2.5s; a period
-        // that keeps resetting the count, so -m 2 never gives up.
+        // 2s; a step of 2s per respawn; a 2s step capped at 2.5s; a period
+        // that keeps resetting the count, so -m 2 never gives up.  (The
+        // test VM sometimes stalls for most of a second, so every
+        // checkpoint is a second or more from a spawn.)
         timed(prelude!(
-            "FAKE_MODE=slow-exit:0 sd svc -p \"$P\" -m 3 -D 1s --respawn-delay-step 0 -S \"$D\"",
-            "sleep 0.5; echo \"runs: $(runs)\"; sleep 1.3; echo \"runs: $(runs)\"; sleep 1.3; echo \"runs: $(runs)\"",
+            // (Spawns at 0, 2.3 and 4.6s.)
+            "FAKE_MODE=slow-exit:0 sd svc -p \"$P\" -m 3 -D 2s --respawn-delay-step 0 -S \"$D\"",
+            "sleep 1.2; echo \"runs: $(runs)\"; sleep 2.3; echo \"runs: $(runs)\"; sleep 2.3; echo \"runs: $(runs)\"",
             "sd svc -p \"$P\" -K",
         )),
         timed(prelude!(
-            "FAKE_MODE=slow-exit:0 sd svc -p \"$P\" -m 3 --respawn-delay-step 1s -S \"$D\"",
-            "sleep 0.8; echo \"runs: $(runs)\"; sleep 1.6; echo \"runs: $(runs)\"; sleep 0.6; echo \"runs: $(runs)\"",
-            "sleep 1.6; echo \"runs: $(runs)\"; sd svc -p \"$P\" -K",
+            // (Spawns at 0, 2.3 and 6.6s.)
+            "FAKE_MODE=slow-exit:0 sd svc -p \"$P\" -m 3 --respawn-delay-step 2s -S \"$D\"",
+            "sleep 1; echo \"runs: $(runs)\"; sleep 2.5; echo \"runs: $(runs)\"; sleep 2; echo \"runs: $(runs)\"",
+            "sleep 2.5; echo \"runs: $(runs)\"; sd svc -p \"$P\" -K",
         )),
         timed(prelude!(
             "FAKE_MODE=slow-exit:0 sd svc -p \"$P\" -m 4 --respawn-delay-step 2s --respawn-delay-cap 2500ms -S \"$D\"",
-            "sleep 1; echo \"runs: $(runs)\"; sleep 2.5; echo \"runs: $(runs)\"; sleep 2.3; echo \"runs: $(runs)\"",
+            // (Spawns at 0, 2.3, 5.1 and 7.9s.)
+            "sleep 1; echo \"runs: $(runs)\"; sleep 2.5; echo \"runs: $(runs)\"; sleep 2.8; echo \"runs: $(runs)\"",
             "sd svc -p \"$P\" -K",
         )),
         timed(prelude!(
