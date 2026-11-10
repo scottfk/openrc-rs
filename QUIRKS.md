@@ -229,6 +229,18 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | A variable name matches any re-export it's a prefix of (`strncmp` over the name's length): `rc-environ svc FO=x` saves `FO` when `svc` re-exports `FOO`, and an empty name (`=x`) matches every re-export. | `applets/rc_environ.rs` (`set_environment`) |
 | low | The program never sets its name, so `-V` prints `(null) (OpenRC) ...`, and a variable that can't be read is reported as `(null): failed to read variable ...`. | `applets/rc_environ.rs` |
 
+## PAM (`USE=pam`)
+
+| Severity | Quirk | Where |
+|---|---|---|
+| medium | pam_openrc counts sessions in `user.<name>`'s `logins` value without a floor: closing more sessions than were opened takes it below 0 (-1), and then the next login doesn't start the user's services (only a count of exactly 0 does). | `crates/pam-openrc` (`sessions`) |
+| low | A `PAM_SILENT` session call sets `EINFO_QUIET` and `EERROR_QUIET` in the login program's own environment, for good: later calls (and the services they start) stay quiet. | `crates/pam-openrc` (`exec_openrc`) |
+| low | pam_openrc gives a session the user's exported environment even when starting their services failed, or was skipped because they were started by hand. | `crates/pam-openrc` (`exec_openrc`) |
+| low | start-stop-daemon and supervise-daemon open a PAM session for a daemon run as another user but never close it (only when the exec fails). | `applets/start_stop_daemon.rs`, `applets/supervise_daemon.rs` |
+| low | Variables the PAM session sets, `RC_*` ones included, survive the daemon's environment clean-up: they're added after the list of what to remove is taken. | `applets/start_stop_daemon.rs`, `applets/supervise_daemon.rs` |
+| low | openrc-user never closes /etc/shells, so each use leaks a descriptor; with no fd 3 inherited, it becomes fd 3, which serves as the user's shell's stdout (read-only: its writes fail). | `applets/openrc_user.rs` (`valid_shell`) |
+| low | When the user's shell isn't in /etc/shells, openrc-user gives it the argv[0] `-/bin/sh`, but still runs the user's shell. | `applets/openrc_user.rs` (`spawn_openrc`) |
+
 # Known deviations from C
 
 These are differences openrc-rs introduces. Each one should be invisible in practice.

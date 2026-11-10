@@ -4,6 +4,7 @@
 # 20261106 - Document OPENRC_BRANDING (distro name in --version) - Claude - scottfk
 # 20261106 - Build hybrid librc.so.1 (Rust + weakened upstream C) - Claude - scottfk
 # 20261107 - librc.so.1 is all Rust: drop the upstream C half - Claude - scottfk
+# 20261110 - PAM=yes (upstream's -Dpam=true): PAM sessions, pam_openrc.so; `make pam` for the tests - Claude - scottfk
 #
 # Cargo builds everything except the final link of the C ABI libraries
 # (the variadic printf-style functions are C, see crates/capi-einfo/), so
@@ -13,6 +14,10 @@
 #   make check        build the C reference if needed, run every test
 #                     (unit + differential), failing if the reference is missing
 #   make install DESTDIR=/some/stage   install with applet symlinks
+#   make PAM=yes ...  with PAM (upstream's -Dpam=true, Gentoo's USE=pam):
+#                     daemon sessions, PAM in openrc-user, and pam_openrc.so
+#                     (installed in PAMLIBDIR)
+#   make pam          the PAM build the tests use, in target/pam/
 #
 # Install layout variables match upstream's meson defaults.  Set
 # OPENRC_BRANDING="Gentoo Linux" (upstream's -Dbranding) to match a distro
@@ -29,9 +34,12 @@ INCLUDEDIR ?= $(PREFIX)/include
 BINDIR     ?= $(PREFIX)/bin
 SBINDIR    ?= $(PREFIX)/sbin
 RC_LIBEXECDIR ?= $(PREFIX)/libexec/rc
+PAMLIBDIR  ?= /lib64/security
 DESTDIR    ?=
+PAM        ?= no
 
 CARGO_PROFILE_FLAG := $(if $(filter release,$(PROFILE)),--release,)
+PAM_FEATURE := $(if $(filter yes,$(PAM)),--features pam,)
 TARGET_DIR := target/$(if $(filter release,$(PROFILE)),release,debug)
 CAPI_DIR   := target/capi
 BIN        := $(TARGET_DIR)/openrc-rs
@@ -43,12 +51,21 @@ RUST_NATIVE_LIBS := -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
 # static archive (nothing in the C shim references them).
 EINFO_RUST_EXPORTS := ebracket ecolor eindent eindentv eoutdent eoutdentv eprefix
 
-.PHONY: all build capi reference test check difftest clippy fmt install clean
+.PHONY: all build capi pam reference test check difftest clippy fmt install clean
 
 all: build capi
 
 build:
-	$(CARGO) build $(CARGO_PROFILE_FLAG) -p openrc-applets
+	$(CARGO) build $(CARGO_PROFILE_FLAG) -p openrc-applets $(PAM_FEATURE)
+ifeq ($(PAM),yes)
+	$(CARGO) build $(CARGO_PROFILE_FLAG) -p openrc-pam-openrc
+endif
+
+# The PAM variant for the differential tests (against the reference's
+# build-pam/), apart from the normal build so features don't mix.
+pam:
+	$(CARGO) build -p openrc-applets --features pam --target-dir target/pam
+	$(CARGO) build -p openrc-pam-openrc --target-dir target/pam
 
 $(TARGET_DIR)/libopenrc_capi_einfo.a: FORCE
 	$(CARGO) build $(CARGO_PROFILE_FLAG) -p openrc-capi-einfo
@@ -89,17 +106,18 @@ capi: $(CAPI_DIR)/libeinfo.so.1 $(CAPI_DIR)/librc.so.1
 reference:
 	tools/build-reference.sh
 
-test: capi
+test: capi pam
 	$(CARGO) test
 
-check: reference capi
+check: reference capi pam
 	OPENRC_REF_REQUIRED=1 $(CARGO) test
 
-difftest: reference capi
+difftest: reference capi pam
 	OPENRC_REF_REQUIRED=1 $(CARGO) test -p openrc-applets --tests
 
 clippy:
 	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy -p openrc-applets -p openrc-pam-openrc --features openrc-applets/pam --all-targets --target-dir target/pam -- -D warnings
 
 fmt:
 	$(CARGO) fmt --all
@@ -126,6 +144,10 @@ install: all
 	install -m 0755 $(CAPI_DIR)/librc.so.1 $(DESTDIR)$(LIBDIR)/librc.so.1
 	ln -sfn librc.so.1 $(DESTDIR)$(LIBDIR)/librc.so
 	install -m 0644 $(RC_DIR)/include/rc.h $(DESTDIR)$(INCLUDEDIR)/rc.h
+ifeq ($(PAM),yes)
+	install -d $(DESTDIR)$(PAMLIBDIR)
+	install -m 0755 $(TARGET_DIR)/libpam_openrc.so $(DESTDIR)$(PAMLIBDIR)/pam_openrc.so
+endif
 
 clean:
 	$(CARGO) clean

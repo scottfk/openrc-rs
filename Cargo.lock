@@ -50,6 +50,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "openrc-pam-openrc"
+version = "0.1.0"
+dependencies = [
+ "openrc-applets",
+ "openrc-compat",
+ "openrc-einfo",
+ "openrc-rc",
+]
+
+[[package]]
 name = "openrc-rc"
 version = "0.1.0"
 dependencies = [

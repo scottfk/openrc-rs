@@ -35,6 +35,7 @@ A drop-in port/reimplementation of openrc in rust.  Currently just something fun
 make            # release binary + target/capi/libeinfo.so.1
 make check      # build the C reference if needed, then run all tests
 make install DESTDIR=/tmp/stage   # binary, applet symlinks, libeinfo, einfo.h
+make PAM=yes install DESTDIR=/tmp/stage   # with PAM (Gentoo's USE=pam), and pam_openrc.so
 ```
 
 `make check` builds the C reference from a checkout set by `OPENRC_SRC`, or
@@ -53,6 +54,12 @@ logs at LOG_EMERG). [crates/applets/tests/diff_root.rs](crates/applets/tests/dif
 covers both, and runs only as root: `checkpath` chown and symlink-ownership
 rules, and syslog output captured on a private `/dev/log`. Run it on a test
 VM with no syslog daemon.
+
+PAM only comes in when a program changes user, which the tests' user
+namespaces can't do, so [crates/applets/tests/diff_pam.rs](crates/applets/tests/diff_pam.rs)
+runs only as root too. It compares `make pam`'s build (in `target/pam/`) with
+the reference's `-Dpam=true` build, using fixture PAM services that log what
+they're asked.
 
 ### Testing on a VM
 
@@ -120,7 +127,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
 
 8. **What Gentoo's `USE="pam"` builds, and the rest of upstream's install set.** One branch per step:
    - [x] `rc-abort`, `rc-environ`, `sysv-initctl`
-   - [ ] PAM: sessions in `start-stop-daemon`/`supervise-daemon`, `openrc-user`, `pam_openrc.so`
+   - [x] PAM: sessions in `start-stop-daemon`/`supervise-daemon`, `openrc-user`, `pam_openrc.so` (`make PAM=yes`)
    - [ ] a live Gentoo ebuild, rehearsed in the VM with a desktop's USE flags
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over

@@ -5,14 +5,9 @@
 //! to this binary.  `openrc-rs <applet> [args...]` also works, and
 //! `openrc-rs --list` prints `<install-dir> <applet>` lines for installers.
 
-mod applets;
-mod plugin;
-mod rc_logger;
-mod schedules;
-mod shared;
-
 use std::os::unix::ffi::OsStringExt;
 
+use openrc_applets::applets;
 use openrc_compat::bcat;
 use openrc_compat::bytes::basename_c;
 use openrc_compat::stdio;

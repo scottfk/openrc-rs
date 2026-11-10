@@ -4,7 +4,9 @@
 //! stops or signals the matching processes along a retry schedule, and
 //! records the daemon for its service (`$RC_SVCNAME`).
 //!
-//! PAM sessions are not ported: the reference build has `-Dpam=false`.
+//! With the `pam` feature (upstream's `-Dpam=true`), a daemon started as
+//! another user gets a PAM session (service `start-stop-daemon`) and its
+//! environment.
 
 use openrc_compat::caps::{self, Iab};
 use openrc_compat::getopt::{Getopt, HasArg, LongOpt};
@@ -325,6 +327,10 @@ impl Child<'_> {
             }
         }
 
+        #[cfg(feature = "pam")]
+        let pamh =
+            self.changeuser.as_ref().map(|u| crate::shared::pam_session_open(self.applet, b"start-stop-daemon", u));
+
         let mut groups = Vec::new();
         if let Some(user) = &self.changeuser {
             match sys::getgrouplist(user, self.gid) {
@@ -393,8 +399,13 @@ impl Child<'_> {
         sys::tiocnotty(tty_fd);
         sys::close_raw(tty_fd);
 
-        // Clean the environment of any RC_, SSD_ and EINFO_ variables.
+        // Clean the environment of any RC_, SSD_ and EINFO_ variables (as
+        // they were before PAM's are added).
         let envs = env::environ();
+        #[cfg(feature = "pam")]
+        if let Some(p) = &pamh {
+            crate::shared::pam_import_env(p);
+        }
         env::unset("SVCNAME");
         for e in &envs {
             if e.starts_with(b"RC_") || e.starts_with(b"SSD_") || e.starts_with(b"EINFO_") {
@@ -515,7 +526,14 @@ impl Child<'_> {
             eerrorx(Some(&bcat!("Failed to set scheduler parameters: ", e.strerror())));
         }
 
-        let e = sys::execvp(self.exec, &argv);
+        #[allow(unused_mut)]
+        let mut e = sys::execvp(self.exec, &argv);
+        #[cfg(feature = "pam")]
+        if let Some(p) = &pamh {
+            p.close_session(openrc_compat::pam::PAM_SILENT);
+            // (C's message shows errno as PAM leaves it.)
+            e = sys::Errno::last();
+        }
         self.fail(&bcat!("failed to exec `", self.exec, "': ", e.strerror()))
     }
 }

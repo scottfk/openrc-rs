@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "openrc_applets"
+path = "src/lib.rs"
+
 [[bin]]
 name = "openrc-rs"
 path = "src/main.rs"
@@ -15,6 +19,11 @@ path = "src/main.rs"
 openrc-compat.workspace = true
 openrc-einfo.workspace = true
 openrc-rc.workspace = true
+
+[features]
+# PAM sessions for daemons run as another user, and PAM in openrc-user
+# (upstream's -Dpam=true).
+pam = ["openrc-compat/pam"]
 
 [lints]
 workspace = true
