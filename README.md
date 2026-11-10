@@ -128,7 +128,7 @@ load our `libeinfo.so.1`, so the whole boot exercises it.
 8. **What Gentoo's `USE="pam"` builds, and the rest of upstream's install set.** One branch per step:
    - [x] `rc-abort`, `rc-environ`, `sysv-initctl`
    - [x] PAM: sessions in `start-stop-daemon`/`supervise-daemon`, `openrc-user`, `pam_openrc.so` (`make PAM=yes`)
-   - [ ] a live Gentoo ebuild, rehearsed in the VM with a desktop's USE flags
+   - [x] a live Gentoo ebuild, rehearsed in the VM with a desktop's USE flags ([contrib/gentoo](contrib/gentoo/README.md))
 
 Until phase 7 is done and tested in a VM, nothing here should be installed over
 a real system's OpenRC.
