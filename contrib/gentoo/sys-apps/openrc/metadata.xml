@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>scottfk@gmail.com</email>
+	</maintainer>
+	<longdescription>
+		OpenRC 0.64.1 with every program and library replaced by openrc-rs,
+		a strict-compatibility Rust port; the service scripts and
+		configuration are upstream's.
+	</longdescription>
+	<use>
+		<flag name="bash">
+			enable the use of bash in service scripts (experimental)
+		</flag>
+		<flag name="netifrc">enable Gentoo's network stack (net.* scripts)</flag>
+		<flag name="newnet">enable the new network stack (experimental)</flag>
+		<flag name="s6">install s6-linux-init</flag>
+		<flag name="sysv-utils">Install sysvinit compatibility scripts for halt, init, poweroff, reboot and shutdown</flag>
+		<flag name="sysvinit">
+			control the dependency on sysvinit (experimental)
+		</flag>
+	</use>
+	<upstream>
+		<remote-id type="codeberg">scottfk/openrc-rs</remote-id>
+	</upstream>
+</pkgmetadata>
