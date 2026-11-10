@@ -122,6 +122,10 @@ pub struct Case {
     /// after this bash prelude (`$ROOT` expanded) has run there.  For programs that signal
     /// "every process" (kill_all): nothing outside the namespace is visible.
     pub pidns: Option<&'static str>,
+    /// With `pidns`: no user namespace, so the case runs as the real root
+    /// (root only, e.g. to change user, which a user namespace that maps
+    /// only root can't).
+    pub real_root: bool,
 }
 
 /// Namespace setup for a case.  The child becomes root of a new user
@@ -155,6 +159,7 @@ impl Case {
             ourlibs: false,
             ns: None,
             pidns: None,
+            real_root: false,
         }
     }
     pub fn env(self, k: &str, v: &str) -> Case {
@@ -162,6 +167,12 @@ impl Case {
     }
     pub fn env_bytes(mut self, k: &str, v: &[u8]) -> Case {
         self.env.push((k.into(), v.to_vec()));
+        self
+    }
+    /// See [`Case::real_root`]; panics unless running as root.
+    pub fn real_root(mut self) -> Case {
+        assert!(is_root(), "real_root cases need root");
+        self.real_root = true;
         self
     }
     pub fn pidns(mut self, prelude: &'static str) -> Case {
@@ -296,7 +307,10 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
             // unshare forks, so bash is PID 1; it runs the prelude and then
             // execs the program (which becomes PID 1) under argv[0].
             let mut c = Command::new("/usr/bin/unshare");
-            c.args(["--user", "--map-root-user", "--pid", "--fork", "--mount", "--mount-proc", "/bin/bash", "-c"]);
+            if !case.real_root {
+                c.args(["--user", "--map-root-user"]);
+            }
+            c.args(["--pid", "--fork", "--mount", "--mount-proc", "/bin/bash", "-c"]);
             c.arg(format!("{}\nexec -a {} \"$0\" \"$@\"", prelude.replace("$ROOT", &root_s), case.applet));
             c.arg(bin);
             c

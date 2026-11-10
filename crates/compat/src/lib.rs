@@ -16,5 +16,7 @@ pub mod env;
 pub mod exec;
 pub mod getopt;
 pub mod num;
+#[cfg(feature = "pam")]
+pub mod pam;
 pub mod stdio;
 pub mod sys;

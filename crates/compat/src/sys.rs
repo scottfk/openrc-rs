@@ -1551,3 +1551,23 @@ pub fn pipe2_flags(flags: i32) -> Result<(i32, i32), Errno> {
     cvt(unsafe { libc::pipe2(fds.as_mut_ptr(), flags) })?;
     Ok((fds[0], fds[1]))
 }
+
+/// `initgroups(user, gid)`.
+pub fn initgroups(user: &[u8], gid: u32) -> Result<(), Errno> {
+    let user = to_cstring(user);
+    // SAFETY: a valid C string.
+    cvt(unsafe { libc::initgroups(user.as_ptr(), gid) }).map(drop)
+}
+
+/// `sigwait()` for one signal (which should be blocked): the signal.
+pub fn sigwait_one(sig: i32) -> i32 {
+    // SAFETY: sigset_t is plain data, initialised by sigemptyset.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, sig);
+        let mut got = 0;
+        libc::sigwait(&set, &mut got);
+        got
+    }
+}

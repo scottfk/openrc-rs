@@ -11,6 +11,7 @@ pub mod openrc;
 pub mod openrc_init;
 pub mod openrc_run;
 pub mod openrc_shutdown;
+pub mod openrc_user;
 pub mod rc_abort;
 pub mod rc_depend;
 pub mod rc_environ;
@@ -149,6 +150,7 @@ pub const APPLETS: &[Applet] = &[
     rc_sbin("swclock", swclock::main),
     rc_sbin("rc-abort", rc_abort::main),
     bin("rc-environ", rc_environ::main),
+    rc_bin("openrc-user", openrc_user::main),
 ];
 
 pub fn find(name: &[u8]) -> Option<&'static Applet> {

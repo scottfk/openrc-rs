@@ -1,0 +1,21 @@
+[package]
+name = "openrc-pam-openrc"
+description = "pam_openrc.so: start and stop a user's OpenRC services with their login sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "pam_openrc"
+crate-type = ["cdylib"]
+
+[dependencies]
+openrc-applets = { path = "../applets", features = ["pam"] }
+openrc-compat = { workspace = true, features = ["pam"] }
+openrc-einfo.workspace = true
+openrc-rc.workspace = true
+
+[lints]
+workspace = true

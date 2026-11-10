@@ -655,6 +655,38 @@ pub fn notify_wait(applet: &[u8], notify: Notify) -> bool {
     }
 }
 
+/// The daemons' PAM session for `--user` (start-stop-daemon.c and
+/// supervise-daemon.c under `HAVE_PAM`): `pam_start(service, user)`,
+/// account check, open the session; any failure is fatal.
+#[cfg(feature = "pam")]
+pub fn pam_session_open(applet: &[u8], service: &[u8], user: &[u8]) -> openrc_compat::pam::Pam {
+    use openrc_compat::pam::{PAM_SILENT, PAM_SUCCESS, Pam};
+    let (pamh, mut r) = Pam::start(service, user);
+    if r == PAM_SUCCESS {
+        r = pamh.acct_mgmt(PAM_SILENT);
+    }
+    if r == PAM_SUCCESS {
+        r = pamh.open_session(PAM_SILENT);
+    }
+    if r != PAM_SUCCESS {
+        openrc_einfo::eerrorx(Some(&bcat!(applet, ": pam error: ", pamh.strerror(r))));
+    }
+    pamh
+}
+
+/// Take the PAM environment: `NAME=value` entries are set, bare names
+/// unset.
+#[cfg(feature = "pam")]
+pub fn pam_import_env(pamh: &openrc_compat::pam::Pam) {
+    for e in pamh.getenvlist() {
+        let _ = match e.iter().position(|&b| b == b'=') {
+            // (putenv() of a copy.)
+            Some(eq) => env::set_bytes(&e[..eq], &e[eq + 1..]),
+            None => env::unset_bytes(&e),
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

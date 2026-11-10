@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo", "crates/capi-rc"]
+members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo", "crates/capi-rc", "crates/pam-openrc"]
+# Without pam-openrc, which turns on the applets' `pam` feature (cargo
+# unifies features across what it builds): PAM builds go to target/pam
+# (`make pam`).
+default-members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets", "crates/capi-einfo", "crates/capi-rc"]
 
 [workspace.package]
 version = "0.1.0"

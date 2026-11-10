@@ -463,8 +463,13 @@ fn deptree_update_needed() {
         v.extend(tail);
         seq(&v)
     };
+    // (No deptree: everything is compared with time(NULL).  The fixture
+    // is aged first: a file written just now can have an mtime a moment
+    // ahead of time()'s coarse clock, so either run could see it as newer.)
+    let mut no_deptree: Vec<&str> = age_all[..age_all.len() - 4].to_vec();
+    no_deptree.push("update_needed");
     let cases = vec![
-        seq(&["update_needed"]),
+        seq(&no_deptree),
         seq(&[
             "update_needed",
             "--",

@@ -5,7 +5,9 @@
 //! `--stop` stops the supervisor, which stops the daemon along the retry
 //! schedule; `--signal` asks the supervisor (through a FIFO) to signal it.
 //!
-//! PAM sessions are not ported: the reference build has `-Dpam=false`.
+//! With the `pam` feature (upstream's `-Dpam=true`), a daemon run as
+//! another user gets a PAM session (service `supervise-daemon`) and its
+//! environment.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
@@ -300,6 +302,10 @@ impl Daemon {
             }
         }
 
+        #[cfg(feature = "pam")]
+        let pamh =
+            self.changeuser.as_ref().map(|u| crate::shared::pam_session_open(&self.applet, b"supervise-daemon", u));
+
         let mut groups = Vec::new();
         if let Some(user) = &self.changeuser {
             match sys::getgrouplist(user, self.gid) {
@@ -352,8 +358,13 @@ impl Daemon {
         sys::tiocnotty(self.tty_fd);
         sys::close_raw(self.tty_fd);
 
-        // Clean the environment of any RC_, SSD_ and EINFO_ variables.
+        // Clean the environment of any RC_, SSD_ and EINFO_ variables (as
+        // they were before PAM's are added).
         let envs = env::environ();
+        #[cfg(feature = "pam")]
+        if let Some(p) = &pamh {
+            crate::shared::pam_import_env(p);
+        }
         env::unset("SVCNAME");
         for e in &envs {
             if e.starts_with(b"RC_") || e.starts_with(b"SSD_") || e.starts_with(b"EINFO_") {
@@ -431,7 +442,14 @@ impl Daemon {
         }
 
         sys::syslog(libc::LOG_INFO, &bcat!("Child command line: ", make_cmdline(argv)));
-        let e = sys::execvp(exec, argv);
+        #[allow(unused_mut)]
+        let mut e = sys::execvp(exec, argv);
+        #[cfg(feature = "pam")]
+        if let Some(p) = &pamh {
+            p.close_session(openrc_compat::pam::PAM_SILENT);
+            // (C's message shows errno as PAM leaves it.)
+            e = sys::Errno::last();
+        }
         self.fail(&bcat!("failed to exec `", exec, "': ", e.strerror()))
     }
 
