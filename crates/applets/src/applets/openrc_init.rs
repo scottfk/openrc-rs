@@ -227,7 +227,7 @@ pub fn main(_applet: &[u8], args: Vec<Vec<u8>>) -> i32 {
     }
     QUIET.store(rc::misc::rc_yesno(env::get("EINFO_QUIET").as_deref()), SeqCst);
     if !quiet() {
-        stdio::out(&bcat!("OpenRC init version ", rc::VERSION, " starting\n"));
+        stdio::out(&bcat!(rc::NAME, " init version ", rc::VERSION, " starting\n"));
     }
     let (reexec, cmdline_runlevel) = match args.get(1) {
         Some(a) if a == b"reexec" => (true, None),

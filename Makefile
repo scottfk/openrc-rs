@@ -5,6 +5,7 @@
 # 20261106 - Build hybrid librc.so.1 (Rust + weakened upstream C) - Claude - scottfk
 # 20261107 - librc.so.1 is all Rust: drop the upstream C half - Claude - scottfk
 # 20261110 - PAM=yes (upstream's -Dpam=true): PAM sessions, pam_openrc.so; `make pam` for the tests - Claude - scottfk
+# 20261111 - Document OPENRC_NAME (program name in banners and --version) - Claude - scottfk
 #
 # Cargo builds everything except the final link of the C ABI libraries
 # (the variadic printf-style functions are C, see crates/capi-einfo/), so
@@ -22,6 +23,8 @@
 # Install layout variables match upstream's meson defaults.  Set
 # OPENRC_BRANDING="Gentoo Linux" (upstream's -Dbranding) to match a distro
 # build's --version output; cargo rebuilds when it changes.
+# OPENRC_NAME="OpenRC-rs" replaces "OpenRC" in the boot banners and
+# --version (not an upstream option; unset, output matches C).
 
 CARGO   ?= cargo
 CC      ?= cc

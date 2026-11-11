@@ -587,7 +587,8 @@ fn do_sysinit() {
         let mut b = bcat!(
             "\n   ",
             c(EColor::Good),
-            "OpenRC ",
+            rc::NAME,
+            " ",
             c(EColor::Hilite),
             rc::VERSION,
             c(EColor::Normal),

@@ -1,6 +1,7 @@
 # Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 # 20261110 - Created by Claude (claude.ai, Anthropic) - scottfk
+# 20261111 - Build with OPENRC_NAME=OpenRC-rs so banners and --version show the port - Claude - scottfk
 
 # OpenRC 0.64.1 with its programs and libraries from openrc-rs (a
 # strict-compatibility Rust port, built live from git).  Upstream's
@@ -92,6 +93,7 @@ rs_make() {
 		PROFILE="release" \
 		PAM="$(usex pam yes no)" \
 		OPENRC_BRANDING="${BRANDING_OS_PRETTY_NAME}" \
+		OPENRC_NAME="OpenRC-rs" \
 		PREFIX="${EPREFIX}/usr" \
 		BINDIR="${EPREFIX}/bin" \
 		SBINDIR="${EPREFIX}/sbin" \

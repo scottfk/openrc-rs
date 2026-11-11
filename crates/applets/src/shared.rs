@@ -129,9 +129,10 @@ pub fn set_quiet_options() {
     }
 }
 
-/// `show_version()`: `applet (OpenRC [sys]) version (branding)`.
+/// `show_version()`: `applet (OpenRC [sys]) version (branding)`, with
+/// `rc::NAME` for `OpenRC`.
 pub fn show_version(applet: &[u8]) -> ! {
-    let mut out = bcat!(applet, " (OpenRC");
+    let mut out = bcat!(applet, " (", rc::NAME);
     if let Some(sys) = rc::rc_sys() {
         out.extend_from_slice(format!(" [{sys}]").as_bytes());
     }
