@@ -328,6 +328,62 @@ fn command(bin: &Path, case: &Case, root: Option<&Path>) -> Command {
     cmd
 }
 
+/// Bind mounts follow symlinks.  Where openrc-rs is installed, the
+/// programs (/usr/bin/openrc, openrc-init, openrc-run, halt, ...) are links
+/// to one multi-call binary, so binding a fake over any of them would land
+/// on that binary, and replace them all.
+///
+/// `symlink_farm(base, dir, names)` makes a stand-in for `dir` in
+/// `base/bin`: a link for each entry of `dir`, by way of `base/orig`, but
+/// empty files to bind over for `names`.  (Links already in `dir` are
+/// copied as they are; relative ones resolve the same, since the stand-in
+/// is mounted at `dir`.)  In the namespace, bind `dir` on `base/orig`, then
+/// `base/bin` on `dir`, then the fakes on `dir/<name>`.  If none of `names`
+/// in `dir` is a symlink (C OpenRC's layout) nothing is needed: `base` is
+/// removed and the result is false.
+pub fn symlink_farm(base: &Path, dir: &Path, names: &[OsString]) -> bool {
+    use std::os::unix::fs::symlink;
+    let _ = std::fs::remove_dir_all(base);
+    if !names.iter().any(|n| dir.join(n).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())) {
+        return false;
+    }
+    let (orig, bin) = (base.join("orig"), base.join("bin"));
+    std::fs::create_dir_all(&orig).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    for e in std::fs::read_dir(dir).unwrap() {
+        let e = e.unwrap();
+        let (name, to) = (e.file_name(), bin.join(e.file_name()));
+        if names.contains(&name) {
+            std::fs::write(&to, "").unwrap();
+        } else if e.file_type().unwrap().is_symlink() {
+            symlink(std::fs::read_link(e.path()).unwrap(), &to).unwrap();
+        } else {
+            symlink(orig.join(&name), &to).unwrap();
+        }
+    }
+    true
+}
+
+/// `symlink_farm`s for the binds in `ns` whose targets are symlinks, one
+/// per (real) directory, beside the sandbox: `(dir, base/orig, base/bin)`.
+fn ns_farms(binds: &[(String, String)], root: Option<&Path>) -> Vec<(PathBuf, PathBuf, PathBuf)> {
+    let mut by_dir: std::collections::BTreeMap<PathBuf, Vec<OsString>> = Default::default();
+    for (_, dst) in binds {
+        let dst = Path::new(dst);
+        if dst.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            let dir = dst.parent().unwrap().canonicalize().unwrap();
+            by_dir.entry(dir).or_default().push(dst.file_name().unwrap().to_owned());
+        }
+    }
+    let mut farms = Vec::new();
+    for (i, (dir, names)) in by_dir.into_iter().enumerate() {
+        let base = root.expect("binds over symlinks need a sandbox").with_extension(format!("farm{i}"));
+        assert!(symlink_farm(&base, &dir, &names));
+        farms.push((dir, base.join("orig"), base.join("bin")));
+    }
+    farms
+}
+
 /// Arrange for the child to enter a fresh user+mount namespace and set up
 /// `ns` before exec.  Everything the child needs is allocated here: after
 /// fork (in a multi-threaded test process) it may only make raw syscalls.
@@ -346,8 +402,12 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
         CString::new(f.display().to_string()).unwrap()
     });
     let tmpfs: Vec<CString> = ns.tmpfs.iter().map(|t| CString::new(t.replace("$ROOT", root_s)).unwrap()).collect();
+    let binds: Vec<(String, String)> = ns.binds.iter().map(|(a, b)| (expand(a), expand(b))).collect();
+    let cs = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+    let farms: Vec<[CString; 3]> =
+        ns_farms(&binds, root).iter().map(|(dir, orig, bin)| [cs(dir), cs(orig), cs(bin)]).collect();
     let binds: Vec<(CString, CString)> =
-        ns.binds.iter().map(|(a, b)| (CString::new(expand(a)).unwrap(), CString::new(expand(b)).unwrap())).collect();
+        binds.into_iter().map(|(a, b)| (CString::new(a).unwrap(), CString::new(b).unwrap())).collect();
 
     fn write_file(path: &std::ffi::CStr, data: &[u8]) -> std::io::Result<()> {
         // SAFETY: valid C string and buffer.
@@ -392,6 +452,17 @@ fn enter_ns_before_exec(cmd: &mut Command, ns: &Ns, root_s: &str, root: Option<&
             for t in &tmpfs {
                 libc::mkdir(t.as_ptr(), 0o755);
                 check(libc::mount(c"tmpfs".as_ptr(), t.as_ptr(), c"tmpfs".as_ptr(), 0, c"size=1m".as_ptr().cast()))?;
+            }
+            for [dir, orig, bin] in &farms {
+                for (src, dst) in [(dir, orig), (bin, dir)] {
+                    check(libc::mount(
+                        src.as_ptr(),
+                        dst.as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_BIND | libc::MS_REC,
+                        std::ptr::null(),
+                    ))?;
+                }
             }
             for (src, dst) in &binds {
                 check(libc::mount(
