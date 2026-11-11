@@ -32,3 +32,12 @@ pub const VERSION: &str = "0.64.1";
 /// Distribution branding shown by `--version`, e.g. `Gentoo Linux`
 /// (upstream's `-Dbranding=`).  Set `OPENRC_BRANDING` at build time.
 pub const BRANDING: Option<&str> = option_env!("OPENRC_BRANDING");
+
+/// The program name in the boot banners and `--version`.  `OpenRC`, as
+/// upstream prints it, unless `OPENRC_NAME` is set at build time (e.g.
+/// `OpenRC-rs`, to show which implementation is installed).  Not an
+/// upstream option: the default keeps output identical to C.
+pub const NAME: &str = match option_env!("OPENRC_NAME") {
+    Some(name) => name,
+    None => "OpenRC",
+};
