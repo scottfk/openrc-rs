@@ -51,6 +51,10 @@ macro_rules! prelude {
             "for f in passwd group nsswitch.conf localtime ld.so.cache; do ",
             "[ -e /etc/$f ] && cp -L /etc/$f \"$ROOT/etc/\"; done; mount --bind \"$ROOT/etc\" /etc || exit 99\n",
             "mount -t tmpfs tmpfs /var/log || exit 99; touch /var/log/wtmp\n",
+            // (Where these are links to openrc-rs, a stand-in /usr/bin:
+            // see common::symlink_farm.)
+            "if [ -d \"$ROOT.farm\" ]; then mount --bind /usr/bin \"$ROOT.farm/orig\" && ",
+            "mount --bind \"$ROOT.farm/bin\" /usr/bin || exit 99; fi\n",
             "for p in openrc halt; do mount --bind \"$ROOT/fake/$p\" /usr/bin/$p || exit 99; done\n",
             "mount --bind \"$0\" /usr/bin/openrc-init || exit 99\n",
             // Helpers, in the background: wait for init's FIFO (it's made
@@ -81,6 +85,8 @@ fn base(r: &Path) {
     script(&r.join("fake/openrc"), FAKE_OPENRC);
     script(&r.join("fake/shell"), FAKE_SHELL);
     script(&r.join("fake/halt"), FAKE_HALT);
+    let names = ["openrc", "halt", "openrc-init"].map(std::ffi::OsString::from);
+    common::symlink_farm(&r.with_extension("farm"), Path::new("/usr/bin"), &names);
 }
 
 /// `openrc-init args` as PID 1, after the prelude's steps, on a pty.
