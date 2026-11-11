@@ -409,7 +409,7 @@ pub fn env_config() {
     if rc_conf_yesno("rc_verbose").0 {
         env::set("EINFO_VERBOSE", b"YES");
     }
-    // `!yesno && errno == 0`: only an explicit "no" turns colour off.
+    // `!yesno && errno == 0`: only an explicit "no" turns color off.
     let (color, err) = rc_conf_yesno("rc_color");
     if (!color && err.is_none()) || rc_conf_yesno("rc_nocolor").0 {
         env::set("EINFO_COLOR", b"NO");

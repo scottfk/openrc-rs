@@ -1,7 +1,7 @@
 //! checkpath vs the C reference, including the filesystem it leaves behind.
 //!
 //! Runs unprivileged, so chown-to-another-user cases exercise the error
-//! paths; root-only behaviour (root-owned symlinks in the parent path)
+//! paths; root-only behavior (root-owned symlinks in the parent path)
 //! needs the VM test bed.
 
 mod common;

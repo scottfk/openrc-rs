@@ -12,7 +12,7 @@ status and side effects, down to the byte. It is not a redesign: if upstream has
 edge case, we copy the odd edge case.
 
 The upstream release we track is pinned in [tools/REFERENCE_TAG](tools/REFERENCE_TAG).
-Behaviour is checked against a build of that tag, not against the documentation or
+Behavior is checked against a build of that tag, not against the documentation or
 against what seems sensible.
 
 Layout:
@@ -28,7 +28,7 @@ Layout:
 
 ## What's useful to contribute
 
-- **Behaviour differences.** If openrc-rs does something different from C OpenRC at the
+- **Behavior differences.** If openrc-rs does something different from C OpenRC at the
   pinned tag, that's a bug. Please send the exact command, environment, and both outputs.
   A new differential test case is even better.
 - **New applets / library functions.** Porting another piece of OpenRC (`rc-service`,
@@ -41,7 +41,7 @@ Layout:
 
 ## What doesn't fit
 
-- **"Improvements" to upstream behaviour.** Nicer error messages, new flags, changed
+- **"Improvements" to upstream behavior.** Nicer error messages, new flags, changed
   defaults and so on belong upstream in OpenRC first. Once they ship in a tagged release,
   we'll match them.
 - **New dependencies** without a strong reason. The workspace depends only on `libc`, and
@@ -78,9 +78,9 @@ resulting filesystem tree are identical. The harness lives in
 [crates/applets/tests/common/mod.rs](crates/applets/tests/common/mod.rs), and each applet
 has its own `diff_<applet>.rs` file.
 
-When you fix a behaviour difference or port something new, add cases that cover it,
+When you fix a behavior difference or port something new, add cases that cover it,
 including error paths and odd arguments. Unit tests are fine for internal helpers, but a
-differential test is what shows the behaviour matches.
+differential test is what shows the behavior matches.
 
 ## Code conventions
 
@@ -106,7 +106,7 @@ The repo lives at <https://codeberg.org/scottfk/openrc-rs>.
 
 1. Fork the repo and create a branch.
 2. Make your change, with tests.
-3. In the PR description, explain **what** changed and **why**. For a behaviour fix,
+3. In the PR description, explain **what** changed and **why**. For a behavior fix,
    include the command that showed the difference. For a port, name the upstream files
    it covers.
 4. If you bumped or tested against a different upstream tag, say which one.

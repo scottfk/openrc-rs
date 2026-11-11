@@ -19,8 +19,8 @@ These are the kinds of bugs I most want to hear about:
   something outside its target is a security bug.
 - **Memory safety.** Unsoundness in the `unsafe` code in `crates/compat` or at the C ABI
   boundary in `crates/capi-einfo`, or anything reachable from safe code that causes
-  undefined behaviour.
-- **Untrusted input.** Crashes, hangs, or unexpected behaviour driven by environment
+  undefined behavior.
+- **Untrusted input.** Crashes, hangs, or unexpected behavior driven by environment
   variables (`EINFO_*`, `RC_*`, ...), config files, or arguments, in places where those
   could come from a less-privileged user.
 - **Divergence from upstream that weakens security.** For example, a permission check or

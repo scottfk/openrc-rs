@@ -1,7 +1,7 @@
 //! C- and glibc-compatible building blocks for openrc-rs.
 //!
 //! openrc-rs aims to be a byte-for-byte drop-in for the C implementation, so
-//! the behaviour of a lot of small libc routines (number parsing, getopt,
+//! the behavior of a lot of small libc routines (number parsing, getopt,
 //! stdio buffering, strerror text) leaks into observable output.  This crate
 //! reimplements those routines with the exact semantics OpenRC relies on.
 //!

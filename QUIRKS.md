@@ -1,6 +1,6 @@
 # Upstream quirks, kept on purpose
 
-openrc-rs reproduces OpenRC **0.64.1** exactly, including behaviour that looks
+openrc-rs reproduces OpenRC **0.64.1** exactly, including behavior that looks
 like a bug. Each item here is marked `QUIRK` in the source. Fixing one is a
 deliberate, separate change (ideally upstream as well), not something to slip
 into a port.
@@ -18,7 +18,7 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 | low | `ewarnv` writes its message to stderr but the newline to stdout. Unlike `ewarn`, it doesn't log. | `einfo/lib.rs` |
 | low | `eendv` / `ewendv` return 0 rather than `retval` when not verbose. | `einfo/lib.rs` |
 | low | `ewendv` prints its message as an error (red), not as a warning, because `_do_eend` compares the command name against `"ewend"` only. | `einfo/lib.rs` |
-| low | `eend`'s `[ ok ]` colours come from `ecolor()`, which picks whichever of stdout, stderr or stdin is a tty, rather than the stream being written to. | `einfo/lib.rs` |
+| low | `eend`'s `[ ok ]` colors come from `ecolor()`, which picks whichever of stdout, stderr or stdin is a tty, rather than the stream being written to. | `einfo/lib.rs` |
 
 ## checkpath
 
@@ -115,7 +115,7 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 
 | Severity | Quirk | Where |
 |---|---|---|
-| medium | `rc-depend -T` (`--notrace`) does `options &= RC_DEP_TRACE` instead of `&= ~RC_DEP_TRACE`. Tracing stays on, and any `-a`, `-o` or `-s` given *before* `-T` is cancelled. | `applets/rc_depend.rs` |
+| medium | `rc-depend -T` (`--notrace`) does `options &= RC_DEP_TRACE` instead of `&= ~RC_DEP_TRACE`. Tracing stays on, and any `-a`, `-o` or `-s` given *before* `-T` is canceled. | `applets/rc_depend.rs` |
 | low | `rc-depend` never prints `no dependency info for service`. Its check needs `rc_deptree_depends()` to return NULL, which it never does, so unknown services are passed on silently. | `applets/rc_depend.rs` |
 | low | When the deptree can't be stat'ed after regenerating it, the message reads `stat(/run/openrc): <error>/deptree`, with the error in the middle of the path. | `applets/shared.rs` (`rc_deptree_load_updating`) |
 
@@ -204,7 +204,7 @@ surprising and user-visible, **low** means it's cosmetic or near-impossible to h
 |---|---|---|
 | **high** | `--dry-run` only stops what goes to openrc-init's FIFO. When `/run/initctl` exists (sysvinit), `openrc-shutdown -D -r now` (or `-p`, `-H`, `-s`) really sends sysvinit the runlevel change: the system reboots or powers off. It also still broadcasts the warning and waits out the delay. | `applets/openrc_shutdown.rs` (`main`) |
 | low | Without a terminal on stdin, the broadcast header says `root@host (null)(date)`: the missing tty name is a NULL passed to `%s`. | `applets/openrc_shutdown.rs` (`broadcast`) |
-| low | The terminals that mustn't be opened (printers, tapes...) are recognised by the major number of `st_dev`, the filesystem holding the device node, instead of `st_rdev`, so none ever is. | `applets/openrc_shutdown.rs` (`file_isatty`) |
+| low | The terminals that mustn't be opened (printers, tapes...) are recognized by the major number of `st_dev`, the filesystem holding the device node, instead of `st_rdev`, so none ever is. | `applets/openrc_shutdown.rs` (`file_isatty`) |
 | low | "you must be root" ends in a blank line (a `\n` inside an einfo message), as does the "Select one of ..." error. | `applets/openrc_shutdown.rs` (`main`) |
 | low | Without openrc-init's FIFO, the command is written to a plain file of that name (`/run/openrc/init.ctl`). | `applets/openrc_shutdown.rs` (`send_cmd`) |
 
@@ -253,12 +253,12 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
 - **`rc_getfile()` on odd files** (used by `service_get_value`): if a file
   is shorter than `st_size` when read, C loops forever; we return what was
   read. If reading fails (e.g. the option is a directory), C hands back a
-  freed buffer (undefined behaviour); we report failure.
-- **Impossible inputs** where C crashes or reads uninitialised memory: a
+  freed buffer (undefined behavior); we report failure.
+- **Impossible inputs** where C crashes or reads uninitialized memory: a
   /proc/mounts line with fewer than four fields (C dereferences NULL; we
   use empty fields), and `waitpid` failing in fstabinfo (C reads an
-  uninitialised status; we report -1).
-- **`librc.so.1` on C's undefined-behaviour paths:** where C frees a
+  uninitialized status; we report -1).
+- **`librc.so.1` on C's undefined-behavior paths:** where C frees a
   caller's buffer and leaves it dangling, we set it to NULL. That's
   `rc_getfile()` when a read fails, and `rc_service_getenv()` when the
   value can't be opened after the buffer was resized (there C leaves the
@@ -275,7 +275,7 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   passes a NULL service to `basename_c()` and crashes; we exit 1 ("not
   started").
 - **`rc-update -u` when the deptree can't be opened for writing (EACCES):**
-  C returns an uninitialised variable (0 in practice, on the builds tried);
+  C returns an uninitialized variable (0 in practice, on the builds tried);
   we return 0.
 - **`rc-status` without a deptree** (none cached and none can be written):
   C passes the NULL deptree to `rc_deptree_depends()` while sorting out
@@ -321,7 +321,7 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   syscalls. libcap is threaded-program aware and, if a program installs
   its own syscall functions, uses them; neither applies here.
 - **libeinfo's `errno`:** its `yesno()` now sets `errno` the way C's does
-  (ENOENT when unset, EINVAL when unrecognised), so programs that look at
+  (ENOENT when unset, EINVAL when unrecognized), so programs that look at
   `errno` after an `e*v()` call see the same value.
 - **`rc-environ` on C's crashing paths:** saving a variable from an unset
   environment variable (`rc-environ svc NAME` with `NAME` unset) makes C
@@ -329,5 +329,5 @@ These are differences openrc-rs introduces. Each one should be invisible in prac
   the deptree can't be loaded at all, C dereferences NULL; we see no
   re-exports.
 - **`sysv-initctl` with an unknown runlevel** (anything but 0-6, S, Q, U
-  in either case): C sends an uninitialised pointer as the command
-  (undefined behaviour); we send nothing.
+  in either case): C sends an uninitialized pointer as the command
+  (undefined behavior); we send nothing.

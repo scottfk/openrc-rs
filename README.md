@@ -4,7 +4,7 @@ A drop-in port/reimplementation of openrc in rust.  Currently just something fun
 
 ## Goals
 
-- **Drop-in compatible with OpenRC 0.64.1:** same command-line behaviour,
+- **Drop-in compatible with OpenRC 0.64.1:** same command-line behavior,
   output, exit codes, on-disk state (`/run/openrc`), init-script interface,
   and C ABI (`libeinfo.so.1`, later `librc.so.1`). Upstream quirks are
   reproduced on purpose and listed in [QUIRKS.md](QUIRKS.md). Improvements
@@ -43,7 +43,7 @@ by cloning upstream. It then runs the **differential tests**: every case runs
 under the C reference and under openrc-rs, with the same `argv[0]`, a clean
 environment and the same sandbox path, and must produce identical stdout,
 stderr, exit status and resulting filesystem tree. Some cases run on a
-pseudo-terminal, to cover colour output. The C ABI is tested the same way, by
+pseudo-terminal, to cover color output. The C ABI is tested the same way, by
 linking one C program against each `libeinfo.so.1`.
 
 Plain `cargo test` works too. It skips the differential tests if the

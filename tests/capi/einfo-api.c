@@ -64,7 +64,7 @@ int main(int argc, char **argv)
 	eprefix(NULL);
 	R(einfo("unprefixed"));
 
-	printf("colours:");
+	printf("colors:");
 	for (i = 0; i <= 7; i++)
 		printf(" %d=[%s]", i, ecolor((ECOLOR)i));
 	printf("\n");

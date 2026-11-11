@@ -6,7 +6,7 @@
 //! below.  `make capi` links both into the shared library with
 //! `libeinfo.map` as the export list.
 //!
-//! Behavioural difference from C, by construction: the shim formats the
+//! Behavioral difference from C, by construction: the shim formats the
 //! message even when it will not be printed (e.g. `EINFO_QUIET`).
 
 use std::ffi::{CStr, c_char, c_int};

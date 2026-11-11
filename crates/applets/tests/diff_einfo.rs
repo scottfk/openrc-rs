@@ -79,7 +79,7 @@ fn eend_family() {
 }
 
 #[test]
-fn colours() {
+fn colors() {
     let mut cases = Vec::new();
     for term in [None, Some("xterm"), Some("dumb"), Some("xterm-256color"), Some("cons25"), Some("linux"), Some("")] {
         let mut c = Case::new("eval_ecolors", &[]);
@@ -92,7 +92,7 @@ fn colours() {
         cases.push(c.clone().env("EINFO_COLOR", "bracket=-1;0"));
         cases.push(c.pty());
     }
-    check_all_named("colours", cases);
+    check_all_named("colors", cases);
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn on_a_terminal() {
             cases.push(Case::new(a, &["1", "failed"]).env("TERM", term).env("EINFO_VERBOSE", "yes").pty());
             cases.push(Case::new(a, &["1", "x"]).env("TERM", term).env("COLUMNS", "4").pty());
         }
-        cases.push(Case::new("einfo", &["no colour"]).env("TERM", term).env("EINFO_COLOR", "off").pty());
+        cases.push(Case::new("einfo", &["no color"]).env("TERM", term).env("EINFO_COLOR", "off").pty());
         cases.push(Case::new("einfo", &["custom"]).env("TERM", term).env("EINFO_COLOR", "good=3;0").pty());
         cases.push(Case::new("ebegin", &["wide"]).env("TERM", term).env("COLUMNS", "120").pty());
     }

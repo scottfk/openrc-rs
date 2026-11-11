@@ -1,5 +1,5 @@
 //! Differential test harness: run the C reference build of OpenRC and
-//! openrc-rs on the same input and require identical behaviour.
+//! openrc-rs on the same input and require identical behavior.
 //!
 //! Compared: stdout, stderr, exit status, and (for cases with a sandbox)
 //! the resulting filesystem tree.  Both run with the same `argv[0]`, a
@@ -627,7 +627,7 @@ impl SyslogCapture {
         SyslogCapture { sock }
     }
 
-    /// Collect what arrived, normalised: glibc sends
+    /// Collect what arrived, normalized: glibc sends
     /// `<PRI>Mmm dd hh:mm:ss ident[pid]: msg`; drop the time and pid.
     fn finish(self) -> Vec<String> {
         let mut out = Vec::new();
@@ -715,7 +715,7 @@ pub fn check_all(group: &str, cases: &[Case]) {
             }
         }
     }
-    assert!(failures.is_empty(), "{group}: behaviour differs from C reference:{failures}");
+    assert!(failures.is_empty(), "{group}: behavior differs from C reference:{failures}");
     eprintln!("{group}: {} cases identical to the C reference", cases.len());
 }
 
