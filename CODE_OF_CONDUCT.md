@@ -4,7 +4,7 @@ Be straightforward and respectful. That's the whole policy.
 
 In practice that means:
 
-- Criticise code and ideas, not people.
+- Criticize code and ideas, not people.
 - No harassment, insults, or personal attacks, in issues, PRs, or anywhere else
   connected to the project.
 - Assume good faith; most friction is a misunderstanding.

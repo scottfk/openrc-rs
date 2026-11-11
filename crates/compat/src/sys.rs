@@ -52,7 +52,7 @@ pub fn blksize(fd: i32) -> Option<usize> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: fstat writes a full struct stat on success.
     let ok = unsafe { libc::fstat(fd, st.as_mut_ptr()) } == 0;
-    // SAFETY: initialised when fstat succeeded.
+    // SAFETY: initialized when fstat succeeded.
     ok.then(|| unsafe { st.assume_init() }.st_blksize as usize)
 }
 
@@ -152,7 +152,7 @@ pub fn fstat(fd: BorrowedFd<'_>) -> Result<Stat, Errno> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: fstat writes a full struct stat on success.
     cvt(unsafe { libc::fstat(fd.as_raw_fd(), st.as_mut_ptr()) })?;
-    // SAFETY: initialised by the successful fstat.
+    // SAFETY: initialized by the successful fstat.
     let st = unsafe { st.assume_init() };
     Ok(Stat::from_raw(&st))
 }
@@ -163,7 +163,7 @@ pub fn fstatat(dirfd: Option<BorrowedFd<'_>>, path: &[u8], flags: i32) -> Result
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: path is a valid C string; fstatat writes a full struct stat on success.
     cvt(unsafe { libc::fstatat(raw_dirfd(dirfd), path.as_ptr(), st.as_mut_ptr(), flags) })?;
-    // SAFETY: initialised by the successful fstatat.
+    // SAFETY: initialized by the successful fstatat.
     let st = unsafe { st.assume_init() };
     Ok(Stat::from_raw(&st))
 }
@@ -362,7 +362,7 @@ pub fn term_cols(fd: i32) -> Option<u16> {
     let mut ws = std::mem::MaybeUninit::<libc::winsize>::uninit();
     // SAFETY: TIOCGWINSZ writes a struct winsize on success.
     let ok = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, ws.as_mut_ptr()) } == 0;
-    // SAFETY: initialised when the ioctl succeeded.
+    // SAFETY: initialized when the ioctl succeeded.
     ok.then(|| unsafe { ws.assume_init() }.ws_col)
 }
 
@@ -454,7 +454,7 @@ impl Regex {
     /// produced into a 256-byte buffer, like OpenRC's callers).
     pub fn new(pattern: &[u8], cflags: i32) -> Result<Regex, Vec<u8>> {
         let pat = to_cstring(pattern);
-        // SAFETY: regex_t is plain data; regcomp initialises it.
+        // SAFETY: regex_t is plain data; regcomp initializes it.
         let mut re: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
         // SAFETY: valid pattern string and regex_t storage.
         let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), cflags) };
@@ -514,7 +514,7 @@ pub fn time() -> i64 {
 /// `mktime()` of a local broken-down time with `tm_isdst = -1`; month is
 /// 1-based and year is the full year, as written.  -1 on failure.
 pub fn mktime(year: i32, month: i32, day: i32, hour: i32, min: i32, sec: i32) -> i64 {
-    // SAFETY: tm is plain data; mktime only reads and normalises it.
+    // SAFETY: tm is plain data; mktime only reads and normalizes it.
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
         tm.tm_year = year.wrapping_sub(1900);
@@ -699,7 +699,7 @@ pub fn chdir(path: &[u8]) -> Result<(), Errno> {
 
 /// Block every signal; returns the previous mask for [`restore_sigmask`].
 pub fn block_all_signals() -> libc::sigset_t {
-    // SAFETY: sigset_t is plain data, initialised by sigfillset/sigprocmask.
+    // SAFETY: sigset_t is plain data, initialized by sigfillset/sigprocmask.
     unsafe {
         let mut full: libc::sigset_t = std::mem::zeroed();
         let mut old: libc::sigset_t = std::mem::zeroed();
@@ -750,7 +750,7 @@ pub mod at {
         let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: valid C string; fstatat writes a full struct stat on success.
         cvt(unsafe { libc::fstatat(dirfd, p.as_ptr(), st.as_mut_ptr(), flags) })?;
-        // SAFETY: initialised by the successful fstatat.
+        // SAFETY: initialized by the successful fstatat.
         Ok(Stat::from_raw(&unsafe { st.assume_init() }))
     }
 
@@ -959,7 +959,7 @@ fn openpty_impl(like: Option<i32>) -> Option<(i32, i32)> {
 
 /// Block `sig`; returns the previous mask for [`restore_sigmask`].
 pub fn block_signal(sig: i32) -> libc::sigset_t {
-    // SAFETY: sigset_t is plain data, initialised by sigemptyset/sigprocmask.
+    // SAFETY: sigset_t is plain data, initialized by sigemptyset/sigprocmask.
     unsafe {
         let mut set: libc::sigset_t = std::mem::zeroed();
         let mut old: libc::sigset_t = std::mem::zeroed();
@@ -1325,7 +1325,7 @@ pub fn strftime_local(t: i64, fmt: &[u8], size: usize) -> Vec<u8> {
 
 /// Block every signal except `keep`; returns the previous mask.
 pub fn block_all_but(keep: &[i32]) -> libc::sigset_t {
-    // SAFETY: sigset_t is plain data, initialised by sigfillset/sigprocmask.
+    // SAFETY: sigset_t is plain data, initialized by sigfillset/sigprocmask.
     unsafe {
         let mut set: libc::sigset_t = std::mem::zeroed();
         let mut old: libc::sigset_t = std::mem::zeroed();
@@ -1561,7 +1561,7 @@ pub fn initgroups(user: &[u8], gid: u32) -> Result<(), Errno> {
 
 /// `sigwait()` for one signal (which should be blocked): the signal.
 pub fn sigwait_one(sig: i32) -> i32 {
-    // SAFETY: sigset_t is plain data, initialised by sigemptyset.
+    // SAFETY: sigset_t is plain data, initialized by sigemptyset.
     unsafe {
         let mut set: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut set);

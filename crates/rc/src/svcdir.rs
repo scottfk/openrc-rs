@@ -100,7 +100,7 @@ pub fn rc_svcdir() -> Vec<u8> {
     c.get_or_insert_with(|| env::get("RC_SVCDIR").unwrap_or_else(|| SVCDIR.as_bytes().to_vec())).clone()
 }
 
-/// The C `static int dirfds[RC_DIR_MAX]`: zero-initialised, -1 after
+/// The C `static int dirfds[RC_DIR_MAX]`: zero-initialized, -1 after
 /// `clear_dirfds()`, and only values > 0 count as cached.  Fds are kept
 /// open until cleared.
 static DIRFDS: Mutex<[i32; RC_DIR_MAX]> = Mutex::new([0; RC_DIR_MAX]);
@@ -171,7 +171,7 @@ pub fn rc_dirfd(dir: RcDir) -> Option<BorrowedFd<'static>> {
 pub fn clear_dirfds() {
     let mut fds = DIRFDS.lock().unwrap_or_else(|e| e.into_inner());
     for fd in fds.iter_mut() {
-        // Fds <= 2 are never cached (zero-initialised entries).
+        // Fds <= 2 are never cached (zero-initialized entries).
         if *fd > 0 {
             // SAFETY: the cache owns this fd and drops it exactly once.
             drop(unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(*fd) });

@@ -33,7 +33,7 @@ fn sysvinit_runlevel(runlevel: i32) {
         b'6' => b"kexec",
         b'Q' | b'q' => return,
         b'U' | b'u' => b"reexec",
-        // C leaves the command uninitialised here (undefined behaviour);
+        // C leaves the command uninitialized here (undefined behavior);
         // we send nothing.
         _ => return,
     };

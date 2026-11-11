@@ -69,7 +69,7 @@ fn do_mount(applet: &[u8], ent: &MntEnt, remount: bool) -> i32 {
         match sys::waitpid(res.pid, 0) {
             Ok((_, st)) => break st,
             Err(e) if e.0 == sys::libc::EINTR => continue,
-            // C then reads an uninitialised status; treat as abnormal.
+            // C then reads an uninitialized status; treat as abnormal.
             Err(_) => return -1,
         }
     };

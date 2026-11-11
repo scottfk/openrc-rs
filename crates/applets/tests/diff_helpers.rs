@@ -145,7 +145,7 @@ fn value_applets() {
     ];
     for get in ["service_get_value", "get_options"] {
         // Not "adir": C reads a directory option through a freed buffer
-        // (undefined behaviour; see QUIRKS.md), so its output varies.
+        // (undefined behavior; see QUIRKS.md), so its output varies.
         for opt in ["port", "empty", "nul", "multi", "missing", "../environ/sshd/ALREADY"] {
             cases.push(svc(get, &[opt]));
         }

@@ -11,7 +11,7 @@
 //! `vsnprintf` before calling in.  `None` stands for a NULL format, which
 //! most functions treat as "print nothing".
 //!
-//! Behaviour, including upstream quirks, follows 0.64.1 exactly; quirks are
+//! Behavior, including upstream quirks, follows 0.64.1 exactly; quirks are
 //! marked `QUIRK` and listed in `QUIRKS.md`.  Return values are the byte
 //! counts the C functions return.
 
@@ -25,7 +25,7 @@ use openrc_compat::num::{atoi, strtoimax};
 use openrc_compat::stdio::{self, Stream};
 use openrc_compat::sys;
 
-/// Colour types (`ECOLOR`), with the C enum's values.
+/// Color types (`ECOLOR`), with the C enum's values.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EColor {
@@ -38,7 +38,7 @@ pub enum EColor {
 }
 
 impl EColor {
-    /// From the C enum value; unknown values behave like C (no colour found).
+    /// From the C enum value; unknown values behave like C (no color found).
     pub fn from_raw(v: i32) -> Option<EColor> {
         Some(match v {
             1 => EColor::Normal,
@@ -69,23 +69,23 @@ const MD: &str = "\x1b[1m";
 const ME: &str = "\x1b[m";
 const UP: &CStr = c"\x1b[A";
 
-struct ColourDef {
+struct ColorDef {
     color: EColor,
     def: i32,
     name: Option<&'static str>,
 }
 
 /// Same order as the C table; `_ecolor` searches it linearly.
-const ECOLORS: [ColourDef; 6] = [
-    ColourDef { color: EColor::Good, def: 2, name: Some("good") },
-    ColourDef { color: EColor::Warn, def: 3, name: Some("warn") },
-    ColourDef { color: EColor::Bad, def: 1, name: Some("bad") },
-    ColourDef { color: EColor::Hilite, def: 6, name: Some("hilite") },
-    ColourDef { color: EColor::Bracket, def: 4, name: Some("bracket") },
-    ColourDef { color: EColor::Normal, def: 0, name: None },
+const ECOLORS: [ColorDef; 6] = [
+    ColorDef { color: EColor::Good, def: 2, name: Some("good") },
+    ColorDef { color: EColor::Warn, def: 3, name: Some("warn") },
+    ColorDef { color: EColor::Bad, def: 1, name: Some("bad") },
+    ColorDef { color: EColor::Hilite, def: 6, name: Some("hilite") },
+    ColorDef { color: EColor::Bracket, def: 4, name: Some("bracket") },
+    ColorDef { color: EColor::Normal, def: 0, name: None },
 ];
 
-/// Terminals known to support colour; any `$TERM` containing "color" does too.
+/// Terminals known to support color; any `$TERM` containing "color" does too.
 const COLOR_TERMS: &[&str] = &[
     "Eterm",
     "alacritty",
@@ -129,11 +129,11 @@ const COLOR_TERMS: &[&str] = &[
     "xterm-ghostty",
 ];
 
-/// Escape sequences, computed once a colour terminal is detected.  Leaked
+/// Escape sequences, computed once a color terminal is detected.  Leaked
 /// so the C ABI can hand out `const char *` that live forever, as in C.
 #[derive(Clone, Copy)]
 struct Caps {
-    colours: [&'static CStr; 6],
+    colors: [&'static CStr; 6],
     flush: &'static CStr,
     up: &'static CStr,
 }
@@ -161,7 +161,7 @@ fn leak(bytes: Vec<u8>) -> &'static CStr {
 }
 
 /// libeinfo's private `yesno()`: unlike librc's, it also accepts on/off.
-/// Returns (value, recognised).  Like C it sets errno: ENOENT for an unset
+/// Returns (value, recognized).  Like C it sets errno: ENOENT for an unset
 /// value, EINVAL for one that's neither yes nor no.  Callers can see this:
 /// start-stop-daemon tests errno after an `ewarnv()`, for one.
 fn yesno(value: Option<&[u8]>) -> (bool, bool) {
@@ -174,11 +174,11 @@ fn yesno(value: Option<&[u8]>) -> (bool, bool) {
     if ["yes", "y", "true", "on", "1"].iter().any(|w| is(w)) {
         return (true, true);
     }
-    let recognised = ["no", "n", "false", "off", "0"].iter().any(|w| is(w));
-    if !recognised {
+    let recognized = ["no", "n", "false", "off", "0"].iter().any(|w| is(w));
+    if !recognized {
         set_errno(libc::EINVAL);
     }
-    (false, recognised)
+    (false, recognized)
 }
 
 /// `noyes()`: true only for an explicit no/n/false/off/0.  errno is kept
@@ -214,13 +214,13 @@ fn is_verbose() -> bool {
 
 fn build_caps() -> Caps {
     let user = env::get("EINFO_COLOR");
-    let mut colours = [c""; 6];
+    let mut colors = [c""; 6];
     for (i, def) in ECOLORS.iter().enumerate() {
         let tmp = match def.name {
             Some(name) => {
                 let mut bold = MD;
                 let mut c = def.def;
-                // User overrides look like "good=2;1:bad=1;0:" (colour;bold).
+                // User overrides look like "good=2;1:bad=1;0:" (color;bold).
                 if let Some(e) = &user
                     && let Some(at) = find(e, name.as_bytes())
                 {
@@ -242,9 +242,9 @@ fn build_caps() -> Caps {
             }
             None => ME.as_bytes().to_vec(),
         };
-        colours[i] = leak(tmp);
+        colors[i] = leak(tmp);
     }
-    Caps { colours, flush: CE, up: UP }
+    Caps { colors, flush: CE, up: UP }
 }
 
 /// `colour_terminal(f)`; `None` is a NULL `FILE *` (skips the tty check).
@@ -334,10 +334,10 @@ fn eindent_out(f: Stream) -> i32 {
     write(f, &vec![b' '; amount as usize])
 }
 
-fn colour_for(color: EColor) -> &'static CStr {
+fn color_for(color: EColor) -> &'static CStr {
     let st = state();
     let Some(caps) = st.caps else { return c"" };
-    ECOLORS.iter().position(|d| d.color == color).map_or(c"", |i| caps.colours[i])
+    ECOLORS.iter().position(|d| d.color == color).map_or(c"", |i| caps.colors[i])
 }
 
 /// `_ecolor(f, color)`.
@@ -345,10 +345,10 @@ fn ecolor_for(f: Option<Stream>, color: EColor) -> &'static CStr {
     if !colour_terminal(f) {
         return c"";
     }
-    colour_for(color)
+    color_for(color)
 }
 
-/// `ecolor()`: the escape sequence for `color`, or "" if not on a colour
+/// `ecolor()`: the escape sequence for `color`, or "" if not on a color
 /// terminal.  Guesses which stream is the tty (stdout, stderr, stdin).
 pub fn ecolor(color: EColor) -> &'static CStr {
     let f = [Stream::Stdout, Stream::Stderr, Stream::Stdin].into_iter().find(|s| s.isatty());
@@ -498,7 +498,7 @@ pub fn ebegin(msg: Option<&[u8]>) -> i32 {
     r
 }
 
-/// `_eend()`: print `[ msg ]` right-aligned (or after the line, no colour).
+/// `_eend()`: print `[ msg ]` right-aligned (or after the line, no color).
 fn eend_bracket(fp: Stream, col: i32, color: i32, msg: Option<&[u8]>) {
     let Some(msg) = msg else { return };
     // C computes this in size_t and truncates to int.
@@ -518,7 +518,7 @@ fn eend_bracket(fp: Stream, col: i32, color: i32, msg: Option<&[u8]>) {
     if cols > 0 && colour_terminal(Some(fp)) {
         let up = state().caps.map_or(c"", |c| c.up);
         let goto = format!("\x1b[{cols}C");
-        // QUIRK: the colours come from ecolor(), which guesses the tty,
+        // QUIRK: the colors come from ecolor(), which guesses the tty,
         // rather than from fp.
         let line = bcat!(
             up,
@@ -586,7 +586,7 @@ pub fn ebracket(col: i32, color: EColor, msg: Option<&[u8]>) {
     eend_bracket(Stream::Stdout, col, color as i32, msg);
 }
 
-/// `ebracket()` with a raw C enum value (unknown colours print as "").
+/// `ebracket()` with a raw C enum value (unknown colors print as "").
 pub fn ebracket_raw(col: i32, color: i32, msg: Option<&[u8]>) {
     eend_bracket(Stream::Stdout, col, color, msg);
 }

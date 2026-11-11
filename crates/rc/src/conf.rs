@@ -88,7 +88,7 @@ fn find_key(list: &ConfigList, key: &[u8]) -> Option<usize> {
     list.iter().position(|l| l.starts_with(key) && l.get(key.len()) == Some(&b'='))
 }
 
-/// `rc_config_set_value()`: normalise one raw line and add it, replacing an
+/// `rc_config_set_value()`: normalize one raw line and add it, replacing an
 /// earlier value for the same key.
 fn set_value(config: &mut ConfigList, value: &[u8]) {
     let off = if value.starts_with(b"export ") { 7 } else { 0 };
@@ -98,7 +98,7 @@ fn set_value(config: &mut ConfigList, value: &[u8]) {
     let rest = p.get(eq + 1..).unwrap_or(&[]);
 
     let token: Option<&[u8]> = if rest.first() == Some(&b'$') {
-        // QUIRK: meant to "preserve shell colouring", but strsep() has
+        // QUIRK: meant to "preserve shell coloring", but strsep() has
         // already cut `value` at the '=', so this takes the text *before*
         // the '=' (the key, plus any "export " prefix) as the value.
         Some(&value[..off + eq])

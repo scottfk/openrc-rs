@@ -312,7 +312,7 @@ fn rc_status_in_state() {
 }
 
 /// On a terminal: the runlevel names are highlighted and each status is
-/// right-aligned with colour.
+/// right-aligned with color.
 #[test]
 fn rc_status_pty() {
     if common::reference_dir().is_none() {

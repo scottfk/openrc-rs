@@ -262,7 +262,7 @@ fn shutdown_later() {
         .env("MKUTMP", mkutmp())
         .env("OSD_STDIN", "/dev/null")
         .pty(),
-        // Cancelled: from another openrc-shutdown, and by a signal.
+        // Canceled: from another openrc-shutdown, and by a signal.
         osd(
             prelude!(
                 "initfifo",

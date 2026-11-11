@@ -79,7 +79,7 @@ pub unsafe extern "C" fn rc_yesno(value: *const c_char) -> bool {
 
 /// `bool rc_getfile(const char *file, char **buffer, size_t *len)`.
 ///
-/// Deviation (C has undefined behaviour here): when reading fails, C frees
+/// Deviation (C has undefined behavior here): when reading fails, C frees
 /// `*buffer` but leaves the dangling pointer; we set it to NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rc_getfile(file: *const c_char, buffer: *mut *mut c_char, len: *mut usize) -> bool {

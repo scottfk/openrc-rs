@@ -164,7 +164,7 @@ pub fn do_exec(args: &ExecArgs) -> Result<ExecResult, Errno> {
 /// (no PATH search) with the current environment, with `out_err` (if
 /// given) dup'ed onto stdout and stderr.  `on_pid` gets the child's pid
 /// while signals are still blocked, so a SIGCHLD handler can already
-/// recognise it.  Err(errno) if fork, the dups or exec failed.
+/// recognize it.  Err(errno) if fork, the dups or exec failed.
 pub fn spawn(path: &[u8], argv: &[Vec<u8>], out_err: Option<i32>, on_pid: impl FnOnce(i32)) -> Result<i32, Errno> {
     spawn_impl(path, argv, out_err, on_pid, false)
 }

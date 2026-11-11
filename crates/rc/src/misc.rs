@@ -1,7 +1,7 @@
 //! Small helpers from `librc-misc.c`.
 
 /// `rc_yesno()`: true for yes/y/true/1 (case-insensitive).  Unlike
-/// libeinfo's private version, on/off are *not* recognised.
+/// libeinfo's private version, on/off are *not* recognized.
 pub fn rc_yesno(value: Option<&[u8]>) -> bool {
     rc_yesno_errno(value).0
 }
