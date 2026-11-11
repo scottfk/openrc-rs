@@ -134,7 +134,6 @@ Every program in OpenRC 0.64.1's install set is ported, and the whole of it
 has been tested in a VM: differential tests against the C build, boots and
 shutdowns under both sysvinit and openrc-init, and the Gentoo ebuild
 ([contrib/gentoo](contrib/gentoo/README.md)), including rolling back to C.
-It has not yet run on real hardware. The plan is to eat my own dogfood on my
-daily driver, but I haven't done it yet. Until then, treat installing it over
+I am now eating my own dogfood, running this on my daily driver. Treat installing it over
 a real system's OpenRC as an experiment: keep a binary package of the C
 release to roll back to, and know how to boot with `init=/bin/bash`.
