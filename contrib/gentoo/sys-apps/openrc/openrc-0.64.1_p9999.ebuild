@@ -2,6 +2,7 @@
 # Distributed under the terms of the GNU General Public License v2
 # 20261110 - Created by Claude (claude.ai, Anthropic) - scottfk
 # 20261111 - Build with OPENRC_NAME=OpenRC-rs so banners and --version show the port - Claude - scottfk
+# 20261115 - Fetch from GitHub; the repo moved off Codeberg - Claude - scottfk
 
 # OpenRC 0.64.1 with its programs and libraries from openrc-rs (a
 # strict-compatibility Rust port, built live from git).  Upstream's
@@ -21,8 +22,8 @@ RUST_MIN_VER="1.88.0"
 inherit branding cargo eapi9-ver git-r3 meson pam
 
 DESCRIPTION="OpenRC manages the services, startup and shutdown of a host (openrc-rs programs)"
-HOMEPAGE="https://codeberg.org/scottfk/openrc-rs https://github.com/OpenRC/openrc/"
-EGIT_REPO_URI="https://codeberg.org/scottfk/openrc-rs.git"
+HOMEPAGE="https://github.com/scottfk/openrc-rs https://github.com/OpenRC/openrc/"
+EGIT_REPO_URI="https://github.com/scottfk/openrc-rs.git"
 EGIT_CHECKOUT_DIR="${WORKDIR}/openrc-rs"
 SRC_URI="
 	https://github.com/OpenRC/openrc/archive/${OPENRC_PV}.tar.gz -> openrc-${OPENRC_PV}.tar.gz

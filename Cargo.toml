@@ -10,7 +10,7 @@ default-members = ["crates/compat", "crates/einfo", "crates/rc", "crates/applets
 version = "0.1.0"
 edition = "2024"
 license = "BSD-2-Clause"
-repository = "https://codeberg.org/scottfk/openrc-rs"
+repository = "https://github.com/scottfk/openrc-rs"
 rust-version = "1.88"
 
 [workspace.dependencies]

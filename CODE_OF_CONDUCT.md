@@ -10,8 +10,8 @@ In practice that means:
 - Assume good faith; most friction is a misunderstanding.
 
 I'll remove comments, close threads, or block people who don't follow this. Since
-the project is hosted on Codeberg, its
-[Terms of Use](https://codeberg.org/codeberg/org/src/branch/main/TermsOfUse.md)
+the project is hosted on GitHub, its
+[Community Guidelines](https://docs.github.com/en/site-policy/github-terms/github-community-guidelines)
 apply too.
 
 To report something privately, email:
