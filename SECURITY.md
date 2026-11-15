@@ -39,7 +39,7 @@ Email them to me instead:
 
 (Replace `(at)` with `@` and `(dot)` with `.`, and remove the spaces.)
 
-If you don't get a reply, open an issue on <https://codeberg.org/scottfk/openrc-rs/issues>
+If you don't get a reply, open an issue on <https://github.com/scottfk/openrc-rs/issues>
 that only says you've sent a security report, without any details.
 
 For low-risk problems, such as hardening suggestions or issues that need root already,

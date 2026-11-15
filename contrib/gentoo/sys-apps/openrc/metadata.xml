@@ -22,6 +22,6 @@
 		</flag>
 	</use>
 	<upstream>
-		<remote-id type="codeberg">scottfk/openrc-rs</remote-id>
+		<remote-id type="github">scottfk/openrc-rs</remote-id>
 	</upstream>
 </pkgmetadata>

@@ -102,7 +102,7 @@ differential test is what shows the behavior matches.
 
 ## How to submit changes
 
-The repo lives at <https://codeberg.org/scottfk/openrc-rs>.
+The repo lives at <https://github.com/scottfk/openrc-rs>.
 
 1. Fork the repo and create a branch.
 2. Make your change, with tests.
